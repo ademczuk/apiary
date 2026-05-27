@@ -49,7 +49,8 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from apiary_policy import PolicyDecision, decide_policy
+from apiary_policy import PolicyDecision, decide_policy, load_environment_policy
+from apiary_proxy.cache_lru import LRUCacheEvictor
 from apiary_quarantine import load_quarantine_db
 
 logger = logging.getLogger("apiary.proxy")
@@ -70,11 +71,19 @@ class ProxyConfig:
     metadata_ttl_seconds: int = METADATA_TTL_SECONDS
     min_age_days: int = 14
     public_base_url: str | None = None  # for dist.tarball rewriting
+    environment: str = "preprod"
+    env_config_path: Path | None = None
+    source_cache_dir: Path = Path("data/source-cache")
+    cache_max_bytes: int = 10 * 1024 * 1024 * 1024
+    cache_sweep_seconds: float = 300.0
 
     def __post_init__(self) -> None:
         self.cache_dir = Path(self.cache_dir)
         self.audit_log = Path(self.audit_log)
         self.quarantine_dir = Path(self.quarantine_dir)
+        self.source_cache_dir = Path(self.source_cache_dir)
+        if self.env_config_path is not None:
+            self.env_config_path = Path(self.env_config_path)
         self.upstream = self.upstream.rstrip("/")
 
 
@@ -83,11 +92,15 @@ class ProxyState:
     config: ProxyConfig = field(default_factory=ProxyConfig)
     client: httpx.AsyncClient | None = None
     quarantine_db: dict[str, Any] = field(default_factory=dict)
+    evictor: LRUCacheEvictor | None = None
 
     async def aclose(self) -> None:
         if self.client is not None:
             await self.client.aclose()
             self.client = None
+        if self.evictor is not None:
+            await self.evictor.stop()
+            self.evictor = None
 
     def reload_quarantine(self) -> None:
         try:
@@ -319,11 +332,22 @@ async def _lifespan(app: FastAPI):
     )
     state.config.cache_dir.mkdir(parents=True, exist_ok=True)
     state.config.audit_log.parent.mkdir(parents=True, exist_ok=True)
+    state.config.source_cache_dir.mkdir(parents=True, exist_ok=True)
     state.reload_quarantine()
+
+    # Start LRU evictor for the tarball cache.
+    state.evictor = LRUCacheEvictor(
+        cache_dir=state.config.cache_dir,
+        max_bytes=state.config.cache_max_bytes,
+        sweep_interval_seconds=state.config.cache_sweep_seconds,
+    )
+    state.evictor.start()
+
     logger.info(
-        "apiary proxy started; upstream=%s cache_dir=%s",
+        "apiary proxy started; upstream=%s cache_dir=%s env=%s",
         state.config.upstream,
         state.config.cache_dir,
+        state.config.environment,
     )
     yield
     await state.aclose()
@@ -339,11 +363,16 @@ app = FastAPI(title="Apiary Registry Proxy", version="0.1.0", lifespan=_lifespan
 
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
+    cache_stats: dict[str, Any] | None = None
+    if state.evictor is not None:
+        cache_stats = state.evictor.stats.to_dict()
     return {
         "status": "ok",
         "upstream": state.config.upstream,
         "cache_dir": str(state.config.cache_dir),
         "quarantine_loaded": bool(state.quarantine_db),
+        "environment": state.config.environment,
+        "cache_stats": cache_stats,
     }
 
 
@@ -389,18 +418,29 @@ async def _serve_tarball(
     if not from_cache:
         payload = await _fetch_upstream_tarball(package, version, filename)
         _save_tarball(package, version, filename, payload)
+    else:
+        # Touch the file so the LRU evictor treats it as recently used.
+        if state.evictor is not None:
+            state.evictor.touch(_tarball_path(package, version, filename))
 
     # Always re-evaluate policy at serve time. Metadata may be cached, but the
     # policy verdict is cheap to recompute and reflects current quarantine.
     metadata = await _get_metadata(package)
     state.reload_quarantine()
-    decision = decide_policy(
+
+    # Source-match is the slowest rule (network IO + SHA256 over many files).
+    # Run it off the event loop so we do not stall other proxy requests.
+    decision = await asyncio.to_thread(
+        decide_policy,
         package=package,
         version=version,
         metadata=metadata,
         tarball_bytes=payload,
         quarantine_db=state.quarantine_db,
         min_age_days=state.config.min_age_days,
+        environment=state.config.environment,
+        env_config_path=state.config.env_config_path,
+        source_cache_dir=state.config.source_cache_dir,
     )
     _write_audit_sidecar(package, version, decision)
     _audit(
@@ -506,14 +546,35 @@ def audit_tail(limit: int = 50) -> list[dict[str, Any]]:
 
 
 def _configure(args: argparse.Namespace) -> None:
+    env_name = args.environment or os.environ.get("APIARY_ENVIRONMENT", "preprod")
+    env_config_path: Path | None = None
+    if args.env_config:
+        env_config_path = Path(args.env_config)
+    elif os.environ.get("APIARY_ENV_CONFIG"):
+        env_config_path = Path(os.environ["APIARY_ENV_CONFIG"])
+
+    # If the caller did not override min_age_days on the CLI, fall back to the
+    # per-environment default. The sentinel -1 means "use env default".
+    cli_min_age = args.min_age_days if args.min_age_days >= 0 else None
+    effective_min_age = cli_min_age
+    if effective_min_age is None:
+        effective_min_age = load_environment_policy(
+            env_name, env_config_path
+        ).min_release_age_days
+
     state.config = ProxyConfig(
         upstream=args.upstream,
         cache_dir=args.cache_dir,
         audit_log=args.audit_log,
         quarantine_dir=args.quarantine_dir,
         metadata_ttl_seconds=args.metadata_ttl,
-        min_age_days=args.min_age_days,
+        min_age_days=effective_min_age,
         public_base_url=args.public_base_url,
+        environment=env_name,
+        env_config_path=env_config_path,
+        source_cache_dir=args.source_cache_dir,
+        cache_max_bytes=args.cache_max_bytes,
+        cache_sweep_seconds=args.cache_sweep_seconds,
     )
 
 
@@ -528,11 +589,45 @@ def main(argv: list[str] | None = None) -> int:
         "--quarantine-dir", type=Path, default=DEFAULT_QUARANTINE_DIR
     )
     parser.add_argument("--metadata-ttl", type=int, default=METADATA_TTL_SECONDS)
-    parser.add_argument("--min-age-days", type=int, default=14)
+    parser.add_argument(
+        "--min-age-days",
+        type=int,
+        default=-1,
+        help="override per-env min release age (negative = use environment default)",
+    )
     parser.add_argument(
         "--public-base-url",
         default=None,
         help="optional explicit base URL for rewritten dist.tarball entries",
+    )
+    parser.add_argument(
+        "--environment",
+        default=None,
+        help="env name (dev|preprod|prod); defaults to $APIARY_ENVIRONMENT or 'preprod'",
+    )
+    parser.add_argument(
+        "--env-config",
+        type=Path,
+        default=None,
+        help="path to YAML environment overrides; defaults to $APIARY_ENV_CONFIG",
+    )
+    parser.add_argument(
+        "--source-cache-dir",
+        type=Path,
+        default=Path("data/source-cache"),
+        help="cache dir for upstream source archives (source-match rule)",
+    )
+    parser.add_argument(
+        "--cache-max-bytes",
+        type=int,
+        default=10 * 1024 * 1024 * 1024,
+        help="LRU eviction threshold for the proxy tarball cache (bytes)",
+    )
+    parser.add_argument(
+        "--cache-sweep-seconds",
+        type=float,
+        default=300.0,
+        help="LRU eviction sweep interval (seconds)",
     )
     parser.add_argument("--log-level", default="info")
     args = parser.parse_args(argv)

@@ -13,6 +13,13 @@ from apiary_policy.checksums import (
     parse_integrity,
     verify_integrity,
 )
+from apiary_policy.environments import (
+    DEFAULT_ENVIRONMENTS,
+    EnvironmentPolicy,
+    EnvironmentRegistry,
+    load_environment_policy,
+    load_environment_registry,
+)
 from apiary_policy.rules import (
     PolicyDecision,
     check_checksum,
@@ -25,6 +32,9 @@ from apiary_policy.rules import (
 
 __all__ = [
     "ChecksumResult",
+    "DEFAULT_ENVIRONMENTS",
+    "EnvironmentPolicy",
+    "EnvironmentRegistry",
     "IntegrityParseError",
     "PolicyDecision",
     "check_checksum",
@@ -34,6 +44,8 @@ __all__ = [
     "check_source_match",
     "compute_digest",
     "decide_policy",
+    "load_environment_policy",
+    "load_environment_registry",
     "parse_integrity",
     "verify_integrity",
 ]

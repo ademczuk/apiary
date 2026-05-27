@@ -18,3 +18,32 @@ overrides:
   npm:
     allow_below: 0.05
     block_at_or_above: 0.30
+
+# Per-environment policy overrides. Three defaults ship with the engine
+# (dev, preprod, prod). Anything not listed here keeps its built-in default.
+# Loaded by apiary_policy.environments.load_environment_registry().
+environments:
+  dev:
+    min_release_age_days: 0
+    install_scripts: warn
+    require_source_match: false
+    require_checksum: false
+    fail_open_on_audit_error: true
+    block_threshold: 0.5
+    log_only: true
+  preprod:
+    min_release_age_days: 7
+    install_scripts: deny
+    require_source_match: true
+    require_checksum: true
+    fail_open_on_audit_error: false
+    block_threshold: 0.3
+    log_only: false
+  prod:
+    min_release_age_days: 14
+    install_scripts: deny
+    require_source_match: true
+    require_checksum: true
+    fail_open_on_audit_error: false
+    block_threshold: 0.2
+    log_only: false
