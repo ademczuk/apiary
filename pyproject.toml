@@ -36,6 +36,7 @@ dependencies = [
     "matplotlib>=3.9",
     # Demo niceties
     "rich>=13.0",
+    "jinja2>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -66,6 +67,9 @@ packages = [
     "apiary_auditors",
     "apiary_cache",
 ]
+
+[tool.hatch.build.targets.wheel.force-include]
+"apiary_quarantine/templates" = "apiary_quarantine/templates"
 
 [tool.ruff]
 line-length = 100

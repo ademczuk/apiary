@@ -31,6 +31,16 @@ echo "=================================================================="
 echo
 pause 1.0
 
+# Step 0a: retroactive incident replay - the headline moment.
+echo ""
+echo "===== INCIDENT REPLAY: postmark-mcp@1.0.16 (Sep 2025 real-world malicious package) ====="
+python demo/run_incident_replay.py --incident postmark-mcp-1.0.16 || true
+pause 3.0
+echo ""
+echo "===== Same package, ONE VERSION EARLIER: postmark-mcp@1.0.12 (legitimate) ====="
+python demo/run_incident_replay.py --incident postmark-mcp-1.0.12
+pause 3.0
+
 # Step 1: intro
 echo "[1/5] Developers install npm packages every day."
 echo "      A handful are malicious. ModuleWarden adds the verdict."

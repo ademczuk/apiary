@@ -1,0 +1,17 @@
+{
+  "name": "lodash",
+  "version": "4.17.21",
+  "description": "Lodash modular utilities.",
+  "main": "lodash.js",
+  "keywords": ["modules", "stdlib", "util"],
+  "author": "John-David Dalton <john.david.dalton@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lodash/lodash.git"
+  },
+  "gitHead": "f299b52f39486275a9e6483b60a8bf2afdf99d70",
+  "scripts": {
+    "test": "echo \"Error: run tests from root\" && exit 1"
+  }
+}

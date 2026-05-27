@@ -1,0 +1,13 @@
+{
+  "incident": "postmark-mcp-1.0.16",
+  "verdict": "block",
+  "failed_rules": [
+    "release_age",
+    "install_scripts",
+    "source_match"
+  ],
+  "passed_rules": [
+    "known_quarantine",
+    "checksum"
+  ]
+}

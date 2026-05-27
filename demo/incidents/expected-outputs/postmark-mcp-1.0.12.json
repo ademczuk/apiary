@@ -1,0 +1,12 @@
+{
+  "incident": "postmark-mcp-1.0.12",
+  "verdict": "allow",
+  "failed_rules": [],
+  "passed_rules": [
+    "known_quarantine",
+    "release_age",
+    "install_scripts",
+    "checksum",
+    "allowlist_override"
+  ]
+}

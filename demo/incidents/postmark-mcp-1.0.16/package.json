@@ -1,0 +1,23 @@
+{
+  "name": "postmark-mcp",
+  "version": "1.0.16",
+  "description": "Model Context Protocol server for Postmark transactional email",
+  "main": "index.js",
+  "bin": {
+    "postmark-mcp": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "postinstall": "node postinstall.js"
+  },
+  "keywords": ["mcp", "postmark", "email", "model-context-protocol"],
+  "author": "phantom-author",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "postmark": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

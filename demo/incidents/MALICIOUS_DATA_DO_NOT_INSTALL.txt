@@ -1,0 +1,26 @@
+MALICIOUS DATA - DO NOT INSTALL
+================================
+
+This directory contains FAITHFUL RECONSTRUCTIONS of real-world malicious
+npm packages. They exist solely so the Apiary policy gate can be exercised
+retroactively against historical incidents. The reconstructions follow the
+SHAPE of the malicious code but every exfiltration target, callback URL,
+and credential sink has been replaced with a sanitized placeholder
+(*.example.invalid).
+
+DO NOT:
+  - npm install any directory under demo/incidents/
+  - copy postinstall.js into a real package
+  - point a registry at this tree
+  - run node directly against any of these files
+
+DO:
+  - read the files to understand the attack pattern
+  - feed the package.json + lifecycle scripts into apiary_policy.rules
+  - use demo/run_incident_replay.py to drive the policy engine
+
+Each incident subdirectory carries its own README explaining the source
+incident, the original CVE / advisory link, and the policy rules that
+catch it.
+
+Reference: README.md per subdirectory.

@@ -41,6 +41,11 @@ DEFAULT_QUARANTINE_DIR = Path("quarantine")
 POLICY_FILENAME = "policy.json"
 NOTES_DIRNAME = "notes"
 
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+MEMO_TEMPLATE_NAME = "control-evidence-memo.md.j2"
+APIARY_VERSION = "0.1.0"
+POLICY_VERSION = "1.0"
+
 # Allow scoped npm names (``@scope/name``) plus unscoped names. Versions are
 # loosely validated semver-ish strings; the proxy does its own strict parsing.
 _PKG_VER_RE = re.compile(
@@ -232,6 +237,118 @@ def validate_quarantine_dir(
         orphan_notes=orphans,
         invalid_keys=invalid,
     )
+
+
+# ----------------------------------------------------------------------------
+# Control Evidence Memo rendering
+# ----------------------------------------------------------------------------
+
+
+def _plain_text_memo(context: dict[str, Any]) -> str:
+    """Plain-text fallback memo used when jinja2 is not installed."""
+    rule_lines: list[str] = []
+    for rule in context.get("rules", []):
+        status = "PASS" if rule.get("passed") else "FAIL"
+        rule_lines.append(
+            f"- {rule.get('name', '<unnamed>')} - {status}\n"
+            f"  - {rule.get('detail', '')}"
+        )
+    rule_block = "\n".join(rule_lines) if rule_lines else "(none recorded)"
+
+    return (
+        "# Control Evidence Memo\n"
+        f"**Control ID:** {context.get('control_id', '')}\n"
+        f"**Package:** {context.get('package', '')}@{context.get('version', '')}\n"
+        f"**Decision:** {str(context.get('decision', '')).upper()}\n"
+        f"**Evaluated:** {context.get('timestamp', '')}\n"
+        f"**Policy version:** {context.get('policy_version', '')}\n"
+        f"**Evaluator:** apiary {context.get('apiary_version', '')}\n\n"
+        "---\n\n"
+        "## Decision\n"
+        f"{context.get('decision_description', '')}\n\n"
+        "## Rule Evaluations\n"
+        f"{rule_block}\n\n"
+        "## LLM Audit Summary\n"
+        f"{context.get('llm_audit') or 'Not performed.'}\n\n"
+        "## Insurance / Compliance Notes\n"
+        f"- Loss path prevented: {context.get('loss_path', '')}\n"
+        f"- Estimated incident class: {context.get('incident_class', '')}\n"
+        "- Reference loss model: IBM Cost of a Data Breach Report 2024 "
+        "places the average software supply-chain compromise at USD 4.91M "
+        "with a 267-day mean time to identify and contain.\n"
+    )
+
+
+def render_control_evidence_memo(context: dict[str, Any]) -> str:
+    """Render the insurance-grade Control Evidence Memo.
+
+    Uses Jinja2 when the package is installed; falls back to a plain-text
+    template that carries the same load-bearing fields so the audit memo
+    never fails to render.
+    """
+    try:
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+    except ImportError:
+        logger.warning("jinja2 not installed; using plain-text memo fallback")
+        return _plain_text_memo(context)
+
+    env = Environment(
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
+        autoescape=select_autoescape(disabled_extensions=(".j2",)),
+        keep_trailing_newline=True,
+    )
+    template = env.get_template(MEMO_TEMPLATE_NAME)
+    return template.render(**context)
+
+
+def build_memo_context(
+    package: str,
+    version: str,
+    decision: str,
+    rules: list[dict[str, Any]],
+    *,
+    loss_path: str = "supply-chain dependency compromise",
+    incident_class: str = "npm-supply-chain",
+    llm_audit: str | None = None,
+    tarball_sha512: str = "(not computed)",
+    metadata_sha256: str = "(not computed)",
+    control_id: str | None = None,
+    approver_role: str = "Security Engineering",
+) -> dict[str, Any]:
+    """Assemble the template context dict from raw policy outputs."""
+    decision_descriptions = {
+        "allow": (
+            "Package meets all dependency-intake controls and is approved "
+            "for installation."
+        ),
+        "quarantine": (
+            "Package fails one or more non-blocking controls and is held "
+            "in quarantine pending manual review."
+        ),
+        "block": (
+            "Package fails one or more blocking controls and is refused "
+            "service by the registry proxy. Installation is prevented."
+        ),
+    }
+    return {
+        "control_id": control_id or f"APIARY-{package}-{version}",
+        "package": package,
+        "version": version,
+        "decision": decision,
+        "decision_description": decision_descriptions.get(
+            decision, "Decision recorded; no description available."
+        ),
+        "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "policy_version": POLICY_VERSION,
+        "apiary_version": APIARY_VERSION,
+        "rules": rules,
+        "llm_audit": llm_audit if llm_audit else "Not performed.",
+        "tarball_sha512": tarball_sha512,
+        "metadata_sha256": metadata_sha256,
+        "approver_role": approver_role,
+        "loss_path": loss_path,
+        "incident_class": incident_class,
+    }
 
 
 # ----------------------------------------------------------------------------

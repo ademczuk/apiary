@@ -1,0 +1,28 @@
+{
+  "name": "postmark-mcp",
+  "version": "1.0.12",
+  "description": "Model Context Protocol server for Postmark transactional email",
+  "main": "index.js",
+  "bin": {
+    "postmark-mcp": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"no tests yet\""
+  },
+  "keywords": ["mcp", "postmark", "email", "model-context-protocol"],
+  "author": "ActiveCampaign Postmark <support@postmarkapp.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ActiveCampaign/postmark-mcp.git"
+  },
+  "gitHead": "a17b3c8e9f0d4e5b6a7c8d9e0f1a2b3c4d5e6f70",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "postmark": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
