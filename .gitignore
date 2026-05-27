@@ -1,0 +1,42 @@
+# editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+
+# data (large, gitignore by default)
+data/raw/
+data/processed/
+data/synthetic/
+models/
+*.gguf
+*.bin
+*.safetensors
+*.parquet
+*.arrow
+
+# logs
+*.log
+wandb/
+runs/
+slurm-*.out
+
+# secrets
+.env
+.env.local
+
+# os
+ehthumbs.db

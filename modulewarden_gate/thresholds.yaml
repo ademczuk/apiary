@@ -1,0 +1,20 @@
+# ModuleWarden gate thresholds.
+# Hot-reloaded by gate.py on every request, so demo tweaks need no restart.
+#
+# Decision logic (from scripts/score_package.py::decide):
+#   score < allow_below              -> allow
+#   score >= block_at_or_above       -> block
+#   anything in between              -> quarantine
+#
+# Pick numbers that match the chosen operating point on the PR curve.
+# Defaults are conservative: hold a wide quarantine band until the model
+# is calibrated.
+
+allow_below: 0.05
+block_at_or_above: 0.30
+
+# Optional per-ecosystem overrides (TODO: wire into decide()).
+overrides:
+  npm:
+    allow_below: 0.05
+    block_at_or_above: 0.30
