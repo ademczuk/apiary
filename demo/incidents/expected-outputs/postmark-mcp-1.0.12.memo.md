@@ -1,8 +1,8 @@
 # Control Evidence Memo
-**Control ID:** APIARY-postmark-mcp-1.0.16
-**Package:** postmark-mcp@1.0.16
-**Decision:** BLOCK
-**Evaluated:** 2026-05-27T23:53:37.886587+00:00
+**Control ID:** APIARY-postmark-mcp-1.0.12
+**Package:** postmark-mcp@1.0.12
+**Decision:** ALLOW
+**Evaluated:** 2026-05-27T23:53:38.867959+00:00
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
 
@@ -15,18 +15,18 @@ This evaluation enforces dependency-intake controls aligned with:
 - CIS Control 16 (Application Software Security)
 
 ## Decision
-Package fails one or more blocking controls and is refused service by the registry proxy. Installation is prevented.
+Package meets all dependency-intake controls and is approved for installation.
 
 ## Rule Evaluations
 
 - **known_quarantine** - PASS
   - no quarantine db loaded
 
-- **release_age** - FAIL
-  - released 0.0d ago, minimum is 7d
+- **release_age** - PASS
+  - released 60.0d ago
 
-- **install_scripts** - FAIL
-  - non-trivial lifecycle scripts: postinstall='node postinstall.js'
+- **install_scripts** - PASS
+  - lifecycle scripts trivial or absent
 
 - **checksum** - PASS
   - sha512 verified
@@ -34,23 +34,26 @@ Package fails one or more blocking controls and is refused service by the regist
 - **source_match** - FAIL
   - skipped (no verdict)
 
+- **allowlist_override** - PASS
+  - postmark-mcp@1.0.12 is on the curated allowlist; source_match stub bypassed
+
 
 ## LLM Audit Summary (if performed)
 Not performed.
 
 ## Evidence Hashes
-- Package tarball SHA-512: `f59c4cd308ca26abd904ba243b028256c275cb433074cbffe0fabf66a0137c8bee873bea65f1530da686390e698a8b7574f2c8baa27a3a0cfb074bf79f3ad744`
-- Metadata snapshot SHA-256: `6ef54a242822b730110276fb6c099dbffb1aa33a52629784afcdfe9ec52fd793`
+- Package tarball SHA-512: `d57d70c746a2c82bd4bb084deffbeae023dea4928b39354f3d464812279cb016a3d1dacb1e85cf0988e65199255852b942cade41e3f3e63099c42335e7dfac18`
+- Metadata snapshot SHA-256: `dc6050bb763d006e6e36eb150ce77c742042c4822082285aa3802742c6f2810f`
 
 ## Exception Path
 If this decision is incorrect, file an exception via:
-1. `apiary-quarantine add postmark-mcp@1.0.16 --state allowlist --rationale "<reason>"`
+1. `apiary-quarantine add postmark-mcp@1.0.12 --state allowlist --rationale "<reason>"`
 2. Sign-off required from: Security Engineering
-3. Exception logged at: `quarantine/notes/postmark-mcp@1.0.16.md`
+3. Exception logged at: `quarantine/notes/postmark-mcp@1.0.12.md`
 
 ## Insurance / Compliance Notes
-- Loss path prevented: credential and transactional-email exfiltration via malicious postinstall script
-- Estimated incident class: npm-supply-chain-credential-theft
+- Loss path prevented: no loss path - package cleared by policy controls
+- Estimated incident class: n/a
 - Reference loss model: IBM Cost of a Data Breach Report 2024 places the average software supply-chain compromise at USD 4.91M with a 267-day mean time to identify and contain. Source: https://www.ibm.com/reports/data-breach
 - Suitable for: cyber-policy underwriting questionnaire (SCA controls, supply-chain attestation)
 

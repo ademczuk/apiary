@@ -1,12 +1,11 @@
 {
-  "incident": "lodash-4.17.21",
   "verdict": "allow",
   "failed_rules": [],
   "passed_rules": [
-    "known_quarantine",
-    "release_age",
-    "install_scripts",
+    "allowlist_override",
     "checksum",
-    "allowlist_override"
+    "install_scripts",
+    "known_quarantine",
+    "release_age"
   ]
 }
