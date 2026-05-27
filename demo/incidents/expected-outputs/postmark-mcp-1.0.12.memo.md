@@ -2,7 +2,7 @@
 **Control ID:** APIARY-postmark-mcp-1.0.12
 **Package:** postmark-mcp@1.0.12
 **Decision:** ALLOW
-**Evaluated:** 2026-05-27T23:53:38.867959+00:00
+**Evaluated:** <TIMESTAMP>
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
 
@@ -42,8 +42,8 @@ Package meets all dependency-intake controls and is approved for installation.
 Not performed.
 
 ## Evidence Hashes
-- Package tarball SHA-512: `d57d70c746a2c82bd4bb084deffbeae023dea4928b39354f3d464812279cb016a3d1dacb1e85cf0988e65199255852b942cade41e3f3e63099c42335e7dfac18`
-- Metadata snapshot SHA-256: `dc6050bb763d006e6e36eb150ce77c742042c4822082285aa3802742c6f2810f`
+- Package tarball SHA-512: `<SHA512>`
+- Metadata snapshot SHA-256: `<SHA256>`
 
 ## Exception Path
 If this decision is incorrect, file an exception via:

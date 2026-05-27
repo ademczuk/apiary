@@ -2,7 +2,7 @@
 **Control ID:** APIARY-lodash-4.17.21
 **Package:** lodash@4.17.21
 **Decision:** ALLOW
-**Evaluated:** 2026-05-27T23:53:39.519651+00:00
+**Evaluated:** <TIMESTAMP>
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
 
@@ -42,8 +42,8 @@ Package meets all dependency-intake controls and is approved for installation.
 Not performed.
 
 ## Evidence Hashes
-- Package tarball SHA-512: `b3406010991dd73456ca56a9e0e48a93d91ea8472f68248fc28682679a66c99f3278c17db5ff53d756e577f44415f20191c2ac1845627fb17435cc0effd1094b`
-- Metadata snapshot SHA-256: `a023d37eb03d2a7bb9218aa2f43157f66ee30c5ba18c65056130228da7a4801b`
+- Package tarball SHA-512: `<SHA512>`
+- Metadata snapshot SHA-256: `<SHA256>`
 
 ## Exception Path
 If this decision is incorrect, file an exception via:

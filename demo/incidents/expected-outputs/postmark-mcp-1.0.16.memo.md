@@ -2,7 +2,7 @@
 **Control ID:** APIARY-postmark-mcp-1.0.16
 **Package:** postmark-mcp@1.0.16
 **Decision:** BLOCK
-**Evaluated:** 2026-05-27T23:53:37.886587+00:00
+**Evaluated:** <TIMESTAMP>
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
 
@@ -39,8 +39,8 @@ Package fails one or more blocking controls and is refused service by the regist
 Not performed.
 
 ## Evidence Hashes
-- Package tarball SHA-512: `f59c4cd308ca26abd904ba243b028256c275cb433074cbffe0fabf66a0137c8bee873bea65f1530da686390e698a8b7574f2c8baa27a3a0cfb074bf79f3ad744`
-- Metadata snapshot SHA-256: `6ef54a242822b730110276fb6c099dbffb1aa33a52629784afcdfe9ec52fd793`
+- Package tarball SHA-512: `<SHA512>`
+- Metadata snapshot SHA-256: `<SHA256>`
 
 ## Exception Path
 If this decision is incorrect, file an exception via:
