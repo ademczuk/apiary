@@ -26,7 +26,8 @@ dependencies = [
     "esprima>=4.0",
     "requests>=2.32",
     "httpx>=0.27",
-    # Gate
+    "aiofiles>=24.0",
+    # Gate + proxy
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.9",
@@ -47,13 +48,24 @@ dev = [
 [project.scripts]
 moduleward-score = "scripts.score_package:main"
 moduleward-bridge = "bumblebee_bridge.ingest:main"
+apiary-proxy = "apiary_proxy.proxy:main"
+apiary-cache-seed = "apiary_cache.seed:main"
+apiary-quarantine = "apiary_quarantine.workflow:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["modulewarden_gate", "bumblebee_bridge"]
+packages = [
+    "modulewarden_gate",
+    "bumblebee_bridge",
+    "apiary_proxy",
+    "apiary_policy",
+    "apiary_quarantine",
+    "apiary_auditors",
+    "apiary_cache",
+]
 
 [tool.ruff]
 line-length = 100

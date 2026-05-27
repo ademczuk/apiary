@@ -46,10 +46,10 @@ torchrun \
     --standalone \
     --nproc_per_node=4 \
     scripts/train_codebert.py \
-        --processed data/processed \
-        --out models/codebert-lora \
-        --model microsoft/codebert-base \
+        --train-data data/processed \
+        --output models/codebert-lora \
+        --base-model microsoft/codebert-base \
         --epochs 10 \
-        --batch 16
+        --batch-size 16
 
 echo "Done at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -46,6 +46,43 @@ AUDIT_LOG_PATH = GATE_DIR / "audit.log"
 AUDIT_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 MODEL_ENV = "APIARY_MODEL_PATH"
 
+# SSRF guard: tarball_url must resolve to one of these hosts. Override via
+# the APIARY_TARBALL_HOSTS env var (comma-separated).
+DEFAULT_TARBALL_HOSTS: tuple[str, ...] = (
+    "registry.npmjs.org",
+    "registry.yarnpkg.com",
+)
+TARBALL_HOSTS_ENV = "APIARY_TARBALL_HOSTS"
+
+
+def _allowed_tarball_hosts() -> set[str]:
+    raw = os.environ.get(TARBALL_HOSTS_ENV)
+    if not raw:
+        return set(DEFAULT_TARBALL_HOSTS)
+    return {h.strip().lower() for h in raw.split(",") if h.strip()}
+
+
+def _validate_tarball_url(url: str) -> None:
+    """Reject any tarball_url whose host is not in the allowlist (SSRF guard)."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400, detail=f"unsupported tarball scheme: {parsed.scheme!r}"
+        )
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise HTTPException(status_code=400, detail="tarball_url has no host")
+    if host not in _allowed_tarball_hosts():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"tarball host {host!r} not in allowlist; set {TARBALL_HOSTS_ENV} "
+                f"to override"
+            ),
+        )
+
 
 class ScoreRequest(BaseModel):
     package: str = Field(..., min_length=1)
@@ -193,9 +230,11 @@ async def score_endpoint(req: ScoreRequest) -> ScoreResponse:
     with tempfile.TemporaryDirectory(prefix="apiary-gate-") as tmp:
         work = Path(tmp)
         if req.tarball_url:
+            url_str = str(req.tarball_url)
+            _validate_tarball_url(url_str)
             tarball = work / f"{req.package}-{req.version}.tgz"
             try:
-                await _download_tarball(str(req.tarball_url), tarball)
+                await _download_tarball(url_str, tarball)
             except httpx.HTTPError as exc:
                 raise HTTPException(
                     status_code=502, detail=f"tarball download failed: {exc}"

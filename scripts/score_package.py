@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import tarfile
 import tempfile
@@ -59,6 +60,59 @@ def decide(score: float, thresholds: dict) -> str:
     return "quarantine"
 
 
+def _safe_tar_extract(archive: Path, dest: Path) -> None:
+    """Extract a tarball into ``dest`` rejecting any path-traversal members.
+
+    Rejects absolute paths, ``..`` traversal segments, and symlink / hardlink
+    members entirely. We never call ``tarfile.extractall`` because it does
+    not validate member names before writing them. Members that resolve
+    outside ``dest`` are logged and skipped.
+    """
+    dest = dest.resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, mode="r:*") as tf:
+        for member in tf.getmembers():
+            name = member.name
+            if not name or name.startswith("/") or os.path.isabs(name):
+                logger.warning("skipping absolute tarball member: %s", name)
+                continue
+            if ".." in Path(name).parts:
+                logger.warning("skipping traversal tarball member: %s", name)
+                continue
+            if member.issym() or member.islnk():
+                logger.warning("skipping link tarball member: %s", name)
+                continue
+            target = (dest / name).resolve()
+            try:
+                target.relative_to(dest)
+            except ValueError:
+                logger.warning("skipping out-of-tree tarball member: %s", name)
+                continue
+            tf.extract(member, dest)
+
+
+def _safe_zip_extract(archive: Path, dest: Path) -> None:
+    """Extract a zip into ``dest`` rejecting any path-traversal members."""
+    dest = dest.resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, mode="r") as zf:
+        for info in zf.infolist():
+            name = info.filename
+            if not name or name.startswith("/") or os.path.isabs(name):
+                logger.warning("skipping absolute zip member: %s", name)
+                continue
+            if ".." in Path(name).parts:
+                logger.warning("skipping traversal zip member: %s", name)
+                continue
+            target = (dest / name).resolve()
+            try:
+                target.relative_to(dest)
+            except ValueError:
+                logger.warning("skipping out-of-tree zip member: %s", name)
+                continue
+            zf.extract(info, dest)
+
+
 def _ensure_package_dir(package: Path, work_dir: Path) -> Path:
     """Return a directory containing the npm package contents.
 
@@ -75,11 +129,9 @@ def _ensure_package_dir(package: Path, work_dir: Path) -> Path:
     suffix = "".join(package.suffixes).lower()
 
     if suffix.endswith(".tgz") or suffix.endswith(".tar.gz") or suffix == ".tar":
-        with tarfile.open(package, mode="r:*") as tf:
-            tf.extractall(target)
+        _safe_tar_extract(package, target)
     elif suffix == ".zip":
-        with zipfile.ZipFile(package, mode="r") as zf:
-            zf.extractall(target)
+        _safe_zip_extract(package, target)
     else:
         raise ValueError(f"unsupported archive format: {package}")
 

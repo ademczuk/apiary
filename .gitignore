@@ -21,6 +21,8 @@ dist/
 data/raw/
 data/processed/
 data/synthetic/
+data/proxy-cache/
+data/proxy-audit.jsonl
 models/
 *.gguf
 *.bin

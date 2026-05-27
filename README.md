@@ -1,61 +1,130 @@
-# Apiary: ModuleWarden Gate for NPM Supply Chain
+# Apiary: a self-hosted npm registry gate for the insurance supply chain
 
-A 36-hour hackathon project. Train a malicious-npm-package classifier and ship it as a developer-facing install gate that turns Bumblebee inventory scans into allow / quarantine / block decisions.
+Apiary is an npm registry proxy plus policy gate plus quarantine workflow. It
+sits between a developer (or a CI pipeline) and the public npm registry,
+caches every tarball it serves, and applies a configurable allow / quarantine
+/ block decision before any byte reaches a developer machine. Built for the
+Apiary Zero-One Hack and aimed at insurance underwriters and brokers (UNIQA,
+Munich Re) who care about premium-grade signal on third-party code that gets
+pulled into the office tomorrow morning.
 
-## 60-second pitch
+## Why this shape
 
-Developers install npm packages every day. A handful of those packages are malicious: typosquats, install-script droppers, exfiltration payloads. Bumblebee (Perplexity's open-source agent) already inventories what is installed. ModuleWarden adds the verdict: each package gets a score, an evidence list, and a routed action. The gate fits between Bumblebee and the developer's terminal, the CI pipeline, or the editor.
+Carriers cannot underwrite "we ran a classifier over public npm". They can
+underwrite "every install in the policyholder's CI went through a gate that
+held the tarball, recorded the decision, and produced an audit trail". The
+gate has to be operationally boring: fast, on-prem, no SaaS round trip, no
+agent on developer laptops.
 
-The model is a LoRA fine-tune of CodeBERT over the figshare NPM Malicious Package Study (210K labelled npm releases, CC BY 4.0). A gradient-booster on hand-extracted features (AST shape, install-script presence, string entropy) serves as the always-available fallback. Conformal calibration via MAPIE gives the gate honest confidence intervals at decision time.
+Apiary's v2 architecture is that gate. Four pieces:
 
-## Run
+1. **Registry proxy** (`apiary_proxy/`). FastAPI server that speaks the npm
+   registry API (metadata, tarballs, `npm login` stub, `/-/ping`). Cache
+   directory on disk, configurable upstream, every request logged.
+2. **Policy engine** (`apiary_policy/`). Five rules with explicit allow /
+   quarantine / block semantics: release age, lifecycle script triage,
+   `dist.integrity` checksum verification (sha512 / sha384 / sha256),
+   known-quarantine lookup, source-match stub. Composed in
+   `decide_policy()`; the proxy calls it on every tarball serve.
+3. **Quarantine workflow** (`apiary_quarantine/`). `quarantine/policy.json`
+   plus mandatory sibling rationale notes under `quarantine/notes/`. The
+   `validate` subcommand is a git pre-commit hook so policy changes can
+   never land silently.
+4. **LLM-driven audit** (`apiary_auditors/`). Reserves 25% of the model
+   context for the audit rubric and 75% for the package code. Three
+   backends ship in-tree: OpenAI (`gpt-4o-mini`), Ollama (local
+   `deepseek-coder:6.7b` or any abliterated variant), and Dwarfstar-style
+   OpenAI-compatible endpoints. The cache seeder
+   (`apiary_cache.seed`) pre-audits a few thousand top packages so the
+   common case is a cache hit at install time.
+
+The CodeBERT classifier from v1 is still in the tree under `scripts/`,
+`modulewarden_gate/`, and `bumblebee_bridge/`, and remains usable as one
+signal among several. It is no longer the centerpiece.
+
+## Quick start
 
 ```bash
 # Python 3.11, uv recommended
 uv venv
 uv pip install -e .
 
-# Download the dataset (figshare DOI 10.6084/m9.figshare.31869370)
-python scripts/download_figshare.py
+# Initialise the quarantine policy
+python -m apiary_quarantine.workflow validate
 
-# Preprocess into a HuggingFace Dataset
-python scripts/preprocess.py
+# Seed the proxy cache with the top 2000 packages (heuristics + policy only)
+python -m apiary_cache.seed --count 2000 --workers 8
 
-# Train the fallback gradient-booster first (less than 60s on CPU)
-python scripts/train_xgb_fallback.py
+# Or seed with full LLM audit via local Ollama
+python -m apiary_cache.seed --count 200 --workers 2 \
+    --audit-backend ollama --audit-model deepseek-coder:6.7b
 
-# Train the CodeBERT LoRA head (Leonardo slurm, see slurm/train.slurm)
-python scripts/train_codebert.py
+# Run the proxy on port 4873
+python -m apiary_proxy.proxy --port 4873 \
+    --cache-dir data/proxy-cache \
+    --upstream https://registry.npmjs.org
 
-# Evaluate
-python scripts/eval.py
-
-# Score one package
-python scripts/score_package.py --package event-stream --version 3.3.6
-
-# Start the gate
-uvicorn modulewarden_gate.gate:app --port 8000
-
-# Pipe Bumblebee output through the gate
-bumblebee scan --profile project --root ~/code | python -m bumblebee_bridge.ingest
+# Point npm at it
+npm config set registry http://127.0.0.1:4873
+npm install lodash
 ```
 
-## Demo
+## Endpoint summary
 
-Run `demo/live_demo.sh` for the 60-second judges' walkthrough. It pipes 10 known-malicious npm package records from OSSF through the gate and renders the decision table.
+| Path | Behaviour |
+|------|-----------|
+| `GET /{package}` | Fetches metadata from upstream, rewrites `dist.tarball` URLs to point back at the proxy. Cache TTL 1h. |
+| `GET /@{scope}/{name}` | Same as above for scoped packages. |
+| `GET /{package}/-/{file}.tgz` | Cache lookup, falls back to upstream, runs the policy, returns 200 (allow) / 451 (block) / 202 (quarantine). |
+| `GET /@{scope}/{name}/-/{file}.tgz` | Same for scoped packages. |
+| `POST /-/v1/login` | Accept-anything stub so `npm login` does not error. |
+| `GET /-/ping` | npm liveness probe. |
+| `GET /healthz` | Operator health (upstream URL, cache dir, quarantine status). |
+| `GET /audit?limit=50` | Tail of the structured audit log. |
+
+## Quarantine workflow
+
+Every policy change requires a sibling rationale Markdown file:
+
+```bash
+python -m apiary_quarantine.workflow add lodash@4.17.21 \
+    --rationale "Pre-approved baseline, manually audited 2026-05-27, see ABC123."
+
+python -m apiary_quarantine.workflow promote lodash@4.17.21
+
+python -m apiary_quarantine.workflow validate
+```
+
+`validate` returns nonzero if any policy entry lacks a note or any note is
+orphaned. Wire it into a git pre-commit hook to keep the audit trail
+honest.
+
+## v1 classifier (still present)
+
+The CodeBERT LoRA fine-tune and LightGBM fallback are still in the tree
+because they remain useful as a probabilistic signal for packages we have
+not yet audited. The training pipeline targets the figshare NPM Malicious
+Package Study (210K labelled releases, CC BY 4.0). See
+`scripts/train_codebert.py` and `slurm/train.slurm`.
 
 ## Layout
 
-- `scripts/` data and model pipeline
-- `modulewarden_gate/` FastAPI scoring endpoint with configurable thresholds
-- `bumblebee_bridge/` stdin NDJSON consumer that talks to the gate
-- `demo/` live demo script and seed packages
-- `slurm/` Leonardo training submission
+- `apiary_proxy/` FastAPI registry proxy with cache + policy gating
+- `apiary_policy/` policy engine and SRI checksum verification
+- `apiary_quarantine/` policy file + rationale workflow with CLI
+- `apiary_auditors/` LLM audit prompt builder + OpenAI / Ollama / Dwarfstar backends
+- `apiary_cache/` cache seeder that pre-audits the top-N popular packages
+- `scripts/` v1 data and classifier pipeline (still functional)
+- `modulewarden_gate/` v1 FastAPI scoring endpoint (still functional)
+- `bumblebee_bridge/` v1 stdin NDJSON consumer for Bumblebee inventory scans
+- `data/patterns/` attack catalogue used for synthetic training data
 
 ## Data sources
 
-Primary: figshare NPM Malicious Package Study (210K records, CC BY 4.0). See `data/README.md`.
+Primary: figshare NPM Malicious Package Study (210K records, CC BY 4.0).
+Backup: OSSF malicious-packages OSV feed (213K npm OSV records, Apache 2.0).
+See `data/README.md`.
 
-Backup: OSSF malicious-packages OSV feed (213,418 npm OSV records, Apache 2.0). See `data/README.md`.
+## License
 
-Excluded: Backstabbers Knife Collection. Access requires emailing the maintainers from an institutional account, which is outside the hackathon time budget.
+Apache 2.0. See `LICENSE`.
