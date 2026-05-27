@@ -1,4 +1,4 @@
-# WhatsApp message to Andreas — 2026-05-27 (final, post-pivot)
+# WhatsApp message to Andreas - 2026-05-27 (final, post-pivot)
 
 Copy-paste below the line. Uses WhatsApp markdown (asterisks for bold, underscores for italic).
 
@@ -60,7 +60,7 @@ This is what's in the one-pager. More credible to a 25-year insurance veteran th
 1. *Track confirmation: UNIQA Insurance.* Grok + Pantheon both call it. Pitch reframed around "reduces loss ratio + produces underwriting evidence" not "trained a classifier".
 2. *ChatGPT shared project link* you sent (zero-one-hack-vienna-...) - I cannot access it (auth-gated). Screenshot or paste-dump the brief contents?
 3. *Dwarfstar endpoint for DeepSeek 4 Flash* - backend stub is wired. Send URL + model name and we drop in env vars (APIARY_DWARFSTAR_URL, APIARY_DWARFSTAR_MODEL).
-4. *UNIQA pre-outreach* - Grok's highest-leverage call: email their hackathon contact tonight asking for 2-3 anonymized historical cyber-claim cases. Even one real example anchored to their actual claims would jump us from 55% to 65% podium odds.
+4. *UNIQA pre-outreach* - Grok's highest-impact call: email their hackathon contact tonight asking for 2-3 anonymized historical cyber-claim cases. Even one real example anchored to their actual claims would jump us from 55% to 65% podium odds.
 5. *Figshare label-inference bug* I caught in `scripts/preprocess.py:126` - the path-name heuristic does not match the actual NPMStudy archive layout. Result: every package labels as 0, training silently produces a constant classifier. ~30 min fix. Want me to handle it or you?
 6. *Leonardo or H100 status* - slurm script wired, needs your account. If Leonardo not happening, what's plan B for compute?
 
