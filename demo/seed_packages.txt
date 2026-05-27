@@ -15,3 +15,8 @@ react@18.2.0
 axios@1.6.7
 express@4.18.2
 moment@2.29.4
+
+# Pre-staged demo allowlist (auto-added by prestage_allowlist.py)
+axios@1.6.2
+typescript@5.3.3
+postmark-mcp@1.0.12

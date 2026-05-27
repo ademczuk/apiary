@@ -227,7 +227,9 @@ def validate_quarantine_dir(
             pkg, ver = _parse_key(key)  # type: ignore[misc]
             expected_notes.add(_note_filename(pkg, ver))
 
-    actual_notes = {p.name for p in notes_dir.glob("*.md")}
+    # README.md is the directory's own documentation; it never corresponds to a
+    # policy entry and must not be flagged as an orphan.
+    actual_notes = {p.name for p in notes_dir.glob("*.md") if p.name != "README.md"}
     missing = sorted(expected_notes - actual_notes)
     orphans = sorted(actual_notes - expected_notes)
 

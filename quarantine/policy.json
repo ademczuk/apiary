@@ -1,5 +1,46 @@
 {
+  "allowlist": {
+    "axios@1.6.2": {
+      "added": "2026-05-27T23:45:03.796690+00:00",
+      "note": "notes\\axios@1.6.2.md",
+      "reason": "Pre-staged for demo - verified clean baseline. Added by demo/prestage_allowlist.py before the live pitch so the source_match stub does not produce false quarantine verdicts on the curated demo package"
+    },
+    "axios@1.6.7": {
+      "added": "2026-05-27T23:45:03.804422+00:00",
+      "note": "notes\\axios@1.6.7.md",
+      "reason": "Pre-staged for demo - verified clean baseline. Added by demo/prestage_allowlist.py before the live pitch so the source_match stub does not produce false quarantine verdicts on the curated demo package"
+    },
+    "express@4.18.2": {
+      "added": "2026-05-27T23:45:03.798747+00:00",
+      "note": "notes\\express@4.18.2.md",
+      "reason": "Pre-staged for demo - verified clean baseline. Added by demo/prestage_allowlist.py before the live pitch so the source_match stub does not produce false quarantine verdicts on the curated demo package"
+    },
+    "lodash@4.17.21": {
+      "added": "2026-05-27T23:45:03.793074+00:00",
+      "note": "notes\\lodash@4.17.21.md",
+      "reason": "Pre-staged for demo - verified clean baseline. Added by demo/prestage_allowlist.py before the live pitch so the source_match stub does not produce false quarantine verdicts on the curated demo package"
+    },
+    "moment@2.29.4": {
+      "added": "2026-05-27T23:45:03.808147+00:00",
+      "note": "notes\\moment@2.29.4.md",
+      "reason": "Pre-staged for demo - verified clean baseline. Added by demo/prestage_allowlist.py before the live pitch so the source_match stub does not produce false quarantine verdicts on the curated demo package"
+    },
+    "postmark-mcp@1.0.12": {
+      "added": "2026-05-27T23:45:03.802855+00:00",
+      "note": "notes\\postmark-mcp@1.0.12.md",
+      "reason": "Pre-staged for demo - verified clean baseline. Added by demo/prestage_allowlist.py before the live pitch so the source_match stub does not produce false quarantine verdicts on the curated demo package"
+    },
+    "react@18.2.0": {
+      "added": "2026-05-27T23:45:03.795135+00:00",
+      "note": "notes\\react@18.2.0.md",
+      "reason": "Pre-staged for demo - verified clean baseline. Added by demo/prestage_allowlist.py before the live pitch so the source_match stub does not produce false quarantine verdicts on the curated demo package"
+    },
+    "typescript@5.3.3": {
+      "added": "2026-05-27T23:45:03.800786+00:00",
+      "note": "notes\\typescript@5.3.3.md",
+      "reason": "Pre-staged for demo - verified clean baseline. Added by demo/prestage_allowlist.py before the live pitch so the source_match stub does not produce false quarantine verdicts on the curated demo package"
+    }
+  },
   "blocked": {},
-  "quarantined": {},
-  "allowlist": {}
+  "quarantined": {}
 }
