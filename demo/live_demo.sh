@@ -1,46 +1,72 @@
 #!/usr/bin/env bash
-# 60-second judges' demo.
-#
-# Plays a fake Bumblebee scan from demo/seed_packages.txt through the gate
-# and renders the verdict table. Designed to fit on one screen with no
-# scrolling.
+# 60-second judges' demo for ModuleWarden gate.
 #
 # Pre-flight:
 #   uv pip install -e .
-#   uvicorn modulewarden_gate.gate:app --port 8000 &
-#   curl -sf http://localhost:8000/healthz
+#   uvicorn modulewarden_gate.gate:app --host 0.0.0.0 --port 4873 &
 #
 # Run:
 #   bash demo/live_demo.sh
 
 set -euo pipefail
 
-GATE_URL="${GATE_URL:-http://localhost:8000}"
-SEED_FILE="${SEED_FILE:-demo/seed_packages.txt}"
+GATE_URL="${GATE_URL:-http://localhost:4873}"
+PACE="${PACE:-1.0}"
 
+REPO_URL="https://github.com/apiary-project/apiary"
+
+pause() { sleep "$(echo "$PACE * $1" | bc -l 2>/dev/null || echo "$1")"; }
+
+# Pre-flight
 if ! curl -sf "${GATE_URL}/healthz" > /dev/null; then
-    echo "Gate not reachable at ${GATE_URL}. Start it with:" >&2
-    echo "    uvicorn modulewarden_gate.gate:app --port 8000" >&2
-    exit 1
-fi
-
-if [[ ! -f "$SEED_FILE" ]]; then
-    echo "Missing seed file: $SEED_FILE" >&2
+    echo "ERROR: gate is not reachable at ${GATE_URL}" >&2
+    echo "Start it with: uvicorn modulewarden_gate.gate:app --host 0.0.0.0 --port 4873" >&2
     exit 1
 fi
 
 echo "=================================================================="
 echo "  ModuleWarden gate live demo"
 echo "  Gate: ${GATE_URL}"
-echo "  Seed: ${SEED_FILE} ($(wc -l < "$SEED_FILE") packages)"
 echo "=================================================================="
 echo
+pause 1.0
 
-# Render the seed list as Bumblebee NDJSON and pipe through the bridge
-python - "$SEED_FILE" <<'PY' | python -m bumblebee_bridge.ingest --gate "${GATE_URL}"
+# Step 1: intro
+echo "[1/5] Developers install npm packages every day."
+echo "      A handful are malicious. ModuleWarden adds the verdict."
+echo
+pause 2.0
+
+# Step 2: known-good package (lodash)
+echo "[2/5] Scoring lodash@4.17.21 (known good)..."
+GOOD_OUT="$(curl -sf -X POST "${GATE_URL}/score" \
+    -H 'Content-Type: application/json' \
+    -d '{"package": "lodash", "version": "4.17.21"}' || echo '{"error": "request failed"}')"
+echo "      ${GOOD_OUT}"
+echo
+pause 2.0
+
+# Step 3: known-bad package (postmark-mcp incident)
+echo "[3/5] Scoring postmark-mcp@1.0.16 (known compromised)..."
+BAD_OUT="$(curl -sf -X POST "${GATE_URL}/score" \
+    -H 'Content-Type: application/json' \
+    -d '{"package": "postmark-mcp", "version": "1.0.16"}' || echo '{"error": "request failed"}')"
+echo "      ${BAD_OUT}"
+echo
+pause 2.0
+
+# Step 4: pipe a Bumblebee-shaped scan through the bridge
+echo "[4/5] Streaming a Bumblebee inventory through the bridge..."
+SEED_FILE="${SEED_FILE:-demo/seed_packages.txt}"
+if [[ ! -f "$SEED_FILE" ]]; then
+    echo "ERROR: missing seed file: $SEED_FILE" >&2
+    exit 1
+fi
+
+python - "$SEED_FILE" <<'PY' | python -m bumblebee_bridge.ingest --gate-url "${GATE_URL}"
 import json, sys
 seed = sys.argv[1]
-with open(seed) as f:
+with open(seed, encoding="utf-8") as f:
     for line in f:
         line = line.strip()
         if not line or line.startswith("#"):
@@ -58,6 +84,10 @@ with open(seed) as f:
             "confidence": "high",
         }))
 PY
-
 echo
-echo "Done. Blocks and quarantines are the model output; allows are the controls."
+pause 1.0
+
+# Step 5: summary
+echo "[5/5] That is the gate: score, decision, evidence per package."
+echo "      Repo: ${REPO_URL}"
+echo "=================================================================="

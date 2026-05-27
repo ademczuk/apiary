@@ -4,8 +4,8 @@ DOI: 10.6084/m9.figshare.31869370
 License: CC BY 4.0
 
 The article has two files, both named NPMStudy.zip:
-- 87.9 MB  (file id 63179326) — probably the curated subset
-- 3.4 GB   (file id 63260731) — the full corpus
+- 87.9 MB  (file id 63179326) - probably the curated subset
+- 3.4 GB   (file id 63260731) - the full corpus
 
 By default this script grabs the smaller archive so the team can iterate
 quickly; pass --full to also pull the big one.

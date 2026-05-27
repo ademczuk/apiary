@@ -1,39 +1,32 @@
-"""Extract hand-crafted features from npm package contents.
+"""Extract hand-crafted features from preprocessed npm package records.
 
-These feed the gradient-booster fallback model (xgboost). The CodeBERT
-model gets the raw text; this script makes the cheap, fast, interpretable
-signals.
-
-Feature families:
-    AST: number of nodes, max depth, presence of eval/Function/setTimeout,
-         requires of suspicious modules (child_process, fs, net, http, dns).
-    install_script: any of preinstall/install/postinstall set, length of
-                    the script body, network calls in script, base64 blobs.
-    entropy: Shannon entropy of identifiers, max string entropy, average
-             string entropy. High entropy is a tell for obfuscated payloads.
-    package_meta: typo-distance to a top-1000 package, age in days, author
-                  email reuse across many packages, version count.
-
-Output: parquet file with one row per package@version.
+Reads a manifest.jsonl (output of preprocess.py) and produces a parquet
+file with one row per package: numeric features for the gradient-booster
+fallback model and as auxiliary signals for the deep model.
 
 Usage:
-    python scripts/extract_features.py --in data/processed --out data/interim/features.parquet
-
-TODO:
-    - Plug in real AST parser (esprima for JS, or tree-sitter-javascript).
-    - Implement top-1000 typo-distance with a precomputed BK-tree.
-    - Make the entropy floor configurable; 4.5+ is "weird", 5.5+ is "blob".
+    python scripts/extract_features.py \
+        --manifest data/processed/v1/manifest.jsonl \
+        --output data/processed/v1/features.parquet
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import re
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Iterable
+
+logger = logging.getLogger("apiary.features")
+
+SEP = "<sep>"
+
+BINARY_EXTS = (".node", ".so", ".exe", ".dll", ".dylib", ".bin")
 
 SUSPICIOUS_REQUIRES = {
     "child_process",
@@ -45,121 +38,263 @@ SUSPICIOUS_REQUIRES = {
     "tls",
     "vm",
     "os",
+    "crypto",
 }
 
-SUSPICIOUS_GLOBALS = {"eval", "Function", "setTimeout", "setInterval"}
+DOTFILE_PATTERNS = (
+    r"\.ssh",
+    r"\.bashrc",
+    r"\.bash_profile",
+    r"\.zshrc",
+    r"\.npmrc",
+    r"\.aws",
+    r"/etc/",
+    r"\.gitconfig",
+    r"\.netrc",
+)
 
-BASE64_RE = re.compile(r"[A-Za-z0-9+/]{60,}={0,2}")
-IDENT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
-STRING_RE = re.compile(r"\"([^\"\\]|\\.)*\"|\'([^\'\\]|\\.)*\'")
+# Compiled regexes (module scope = compiled once)
+RE_BASE64 = re.compile(r"[A-Za-z0-9+/]{60,}={0,2}")
+RE_IDENT = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+RE_EVAL_CALLS = re.compile(r"\beval\s*\(")
+RE_NEW_FUNCTION = re.compile(r"\bnew\s+Function\s*\(")
+RE_CHILD_PROCESS = re.compile(
+    r"\b(?:child_process|spawn|spawnSync|exec|execSync|fork)\b"
+)
+RE_REQUIRE_STRING = re.compile(r"require\(\s*[\"']([^\"']+)[\"']\s*\)")
+RE_REQUIRE_DYNAMIC = re.compile(r"require\(\s*([A-Za-z_$][A-Za-z0-9_$\.]*)")
+RE_NETWORK_IMPORT = re.compile(
+    r"require\(\s*[\"'](?:http|https|net|tls|dgram|axios|node-fetch|got)[\"']\s*\)"
+    r"|import\s+.*?from\s+[\"'](?:axios|node-fetch|got|undici)[\"']"
+    r"|\bfetch\s*\("
+)
+RE_FS_WRITE = re.compile(
+    r"\b(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream)\s*\("
+)
+RE_DOTFILE = re.compile("|".join(DOTFILE_PATTERNS))
+RE_OBFUSCATED_IDENT = re.compile(
+    r"\b(?:_0x[0-9a-fA-F]+|\$[A-Z_][A-Z0-9_]*|[a-zA-Z]{1,2}\$\$\$)\b"
+)
+
+
+def _setup_logging(verbose: bool = False) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
 
 def shannon_entropy(text: str) -> float:
-    """Compute Shannon entropy of a string (bits per char)."""
+    """Shannon entropy in bits per character."""
     if not text:
         return 0.0
     counts = Counter(text)
     n = len(text)
-    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+    return -sum((c / n) * math.log2(c / n) for c in counts.values() if c)
 
 
-def install_script_features(scripts: dict) -> dict:
-    """Pull features from package.json scripts block.
+def _parse_package_json_blob(text: str) -> dict:
+    """The first SEP-delimited blob is the package.json contents."""
+    if not text:
+        return {}
+    head = text.split(SEP, 1)[0]
+    try:
+        return json.loads(head)
+    except json.JSONDecodeError:
+        return {}
 
-    scripts is the parsed JSON object; may be missing or empty.
-    """
+
+def _flatten_install_scripts(scripts: dict) -> str:
     if not isinstance(scripts, dict):
-        scripts = {}
-    install_keys = ("preinstall", "install", "postinstall")
-    body = " ".join(str(scripts.get(k, "")) for k in install_keys)
-    return {
-        "has_install_script": int(any(k in scripts for k in install_keys)),
-        "install_script_len": len(body),
-        "install_script_entropy": shannon_entropy(body),
-        "install_script_has_curl": int("curl " in body or "wget " in body),
-        "install_script_has_pipe_sh": int("| sh" in body or "| bash" in body),
-    }
+        return ""
+    return "\n".join(
+        str(scripts.get(k, ""))
+        for k in ("preinstall", "install", "postinstall", "prepublish", "prepare")
+        if k in scripts
+    )
 
 
-def text_features(text: str) -> dict:
-    """Cheap text-only features over the raw blob (install script, JS, etc.)."""
-    requires = set(re.findall(r"require\([\"\']([^\"\']+)[\"\']\)", text or ""))
-    globals_used = set(re.findall(r"\b(eval|Function|setTimeout|setInterval)\b", text or ""))
-    strings = [m.group(0) for m in STRING_RE.finditer(text or "")]
-    str_entropies = [shannon_entropy(s) for s in strings] or [0.0]
-    return {
-        "n_chars": len(text or ""),
-        "n_lines": (text or "").count("\n") + 1 if text else 0,
-        "suspicious_requires": len(requires & SUSPICIOUS_REQUIRES),
-        "suspicious_globals": len(globals_used & SUSPICIOUS_GLOBALS),
-        "max_string_entropy": max(str_entropies),
-        "mean_string_entropy": sum(str_entropies) / len(str_entropies),
-        "n_base64_blobs": len(BASE64_RE.findall(text or "")),
-    }
+def _count_lifecycle_hooks(scripts: dict) -> int:
+    if not isinstance(scripts, dict):
+        return 0
+    keys = {"preinstall", "install", "postinstall", "prepublish", "prepare", "publish"}
+    return sum(1 for k in scripts if k in keys)
 
 
-def ast_features(text: str) -> dict:
-    """Parse with esprima and extract structural features.
+def _mean_identifier_length(text: str) -> float:
+    idents = RE_IDENT.findall(text or "")
+    if not idents:
+        return 0.0
+    return sum(len(i) for i in idents) / len(idents)
 
-    TODO: handle parse errors gracefully (malicious code often is malformed
-    or uses non-standard syntax). Return zeros + flag on failure.
-    """
-    # Stub for now; real implementation uses esprima.parseModule and walks
-    # the tree counting node types, max depth, etc.
-    return {
-        "ast_n_nodes": 0,
-        "ast_max_depth": 0,
-        "ast_parse_failed": 1,
-    }
+
+def _count_dynamic_require(text: str) -> int:
+    """Match require(expr) where expr is NOT a quoted string."""
+    if not text:
+        return 0
+    # Find all require(...) and subtract the string-arg ones
+    all_calls = len(re.findall(r"require\s*\(", text))
+    string_calls = len(RE_REQUIRE_STRING.findall(text))
+    return max(0, all_calls - string_calls)
+
+
+def _binary_file_signal(meta: dict) -> bool:
+    """Look at package.json `files` field + `bin` field for binary hints."""
+    fields = []
+    if isinstance(meta.get("files"), list):
+        fields.extend(meta["files"])
+    if isinstance(meta.get("bin"), dict):
+        fields.extend(meta["bin"].values())
+    elif isinstance(meta.get("bin"), str):
+        fields.append(meta["bin"])
+    return any(isinstance(f, str) and f.lower().endswith(BINARY_EXTS) for f in fields)
 
 
 def extract_row(record: dict) -> dict:
-    """Turn one preprocessed record into a feature row."""
-    text = record.get("raw_text", "") or ""
-    scripts = record.get("package_json_scripts", {})
+    """Build the per-package feature row."""
+    text: str = record.get("text", "") or ""
+    meta = _parse_package_json_blob(text)
+    scripts = meta.get("scripts") if isinstance(meta, dict) else {}
+    scripts = scripts if isinstance(scripts, dict) else {}
+
+    install_body = _flatten_install_scripts(scripts)
+
+    deps = meta.get("dependencies") if isinstance(meta, dict) else {}
+    dev_deps = meta.get("devDependencies") if isinstance(meta, dict) else {}
+    deps = deps if isinstance(deps, dict) else {}
+    dev_deps = dev_deps if isinstance(dev_deps, dict) else {}
+
+    # File-derived signals - text-only because we no longer hold the tree
+    n_sep_segments = text.count(SEP) + (1 if text else 0)
+
+    has_install = "install" in scripts
+    has_post = "postinstall" in scripts
+    has_pre = "preinstall" in scripts
+
+    pkg_name = record.get("package_name") or meta.get("name") or ""
     row = {
-        "package_name": record.get("package_name"),
-        "version": record.get("version"),
-        "ecosystem": record.get("ecosystem"),
-        "label": record.get("label"),
+        "package_name": pkg_name,
+        "version": record.get("version") or meta.get("version") or "0.0.0",
+        "ecosystem": record.get("ecosystem", "npm"),
+        "source": record.get("source", "unknown"),
+        "label": int(record.get("label", 0)),
+        "split": record.get("split", "train"),
+        "n_files": int(n_sep_segments),
+        "total_size_bytes": len(text),
+        "has_install_script": bool(has_install),
+        "has_postinstall_script": bool(has_post),
+        "has_preinstall_script": bool(has_pre),
+        "install_script_length": len(install_body),
+        "n_lifecycle_hooks": _count_lifecycle_hooks(scripts),
+        "n_dependencies": len(deps),
+        "n_dev_dependencies": len(dev_deps),
+        "has_binary_files": _binary_file_signal(meta),
+        "entropy_install_script": shannon_entropy(install_body),
+        "n_eval_calls": len(RE_EVAL_CALLS.findall(text)),
+        "n_function_constructor": len(RE_NEW_FUNCTION.findall(text)),
+        "n_child_process_calls": len(RE_CHILD_PROCESS.findall(text)),
+        "n_fs_writes_to_dotfiles": _count_dotfile_writes(text),
+        "n_network_calls": len(RE_NETWORK_IMPORT.findall(text)),
+        "n_base64_strings": len(RE_BASE64.findall(text)),
+        "n_obfuscated_identifiers": len(RE_OBFUSCATED_IDENT.findall(text)),
+        "n_dynamic_require": _count_dynamic_require(text),
+        "mean_identifier_length": _mean_identifier_length(text),
+        "package_name_length": len(pkg_name),
+        "package_age_days": _meta_field_or_nan(meta, "_age_days"),
+        "n_authors_in_history": _meta_field_or_nan(meta, "_n_authors"),
     }
-    row.update(install_script_features(scripts))
-    row.update(text_features(text))
-    row.update(ast_features(text))
     return row
+
+
+def _count_dotfile_writes(text: str) -> int:
+    """Count fs.write* calls near dotfile paths.
+
+    Heuristic: find each fs.write* call and inspect a 200-char window after
+    it for a dotfile pattern.
+    """
+    if not text:
+        return 0
+    count = 0
+    for m in RE_FS_WRITE.finditer(text):
+        window = text[m.end() : m.end() + 200]
+        if RE_DOTFILE.search(window):
+            count += 1
+    return count
+
+
+def _meta_field_or_nan(meta: dict, field: str) -> float:
+    """Return float(field) if present, else NaN. Supports custom underscore-fields."""
+    if not isinstance(meta, dict):
+        return float("nan")
+    val = meta.get(field)
+    if isinstance(val, (int, float)):
+        return float(val)
+    return float("nan")
+
+
+def _iter_manifest(path: Path) -> Iterable[dict]:
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+
+def _write_parquet(rows: list[dict], path: Path) -> None:
+    """Write rows to parquet via pandas+pyarrow if available, else JSONL twin."""
+    try:
+        import pandas as pd
+    except ImportError:
+        logger.warning("pandas not available; writing JSONL twin instead")
+        twin = path.with_suffix(".jsonl")
+        with twin.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        logger.info("wrote %s (%d rows)", twin, len(rows))
+        return
+
+    df = pd.DataFrame(rows)
+    try:
+        df.to_parquet(path, index=False)
+        logger.info("wrote %s (%d rows, %d columns)", path, len(df), len(df.columns))
+    except (ImportError, ValueError) as exc:
+        logger.warning("parquet write failed (%s); falling back to JSONL", exc)
+        twin = path.with_suffix(".jsonl")
+        df.to_json(twin, orient="records", lines=True)
+        logger.info("wrote %s (%d rows)", twin, len(rows))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--in", dest="in_dir", default="data/processed")
-    parser.add_argument("--out", default="data/interim/features.parquet")
+    parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    in_dir = Path(args.in_dir)
-    out_path = Path(args.out)
+    _setup_logging(args.verbose)
+
+    manifest: Path = args.manifest
+    out_path: Path = args.output
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if not manifest.exists():
+        logger.error("manifest not found: %s", manifest)
+        return 1
+
     rows: list[dict] = []
-    for split in ("train", "val", "test"):
-        path = in_dir / f"{split}.jsonl"
-        if not path.exists():
-            continue
-        with path.open(encoding="utf-8") as f:
-            for line in f:
-                record = json.loads(line)
-                row = extract_row(record)
-                row["split"] = split
-                rows.append(row)
+    for record in _iter_manifest(manifest):
+        rows.append(extract_row(record))
 
-    print(f"Extracted features for {len(rows)} records")
+    logger.info("extracted features for %d records", len(rows))
+    if not rows:
+        logger.warning("no records produced; check manifest content")
+        return 1
 
-    # TODO: write parquet via pyarrow. For now emit JSONL so this is runnable
-    # without the binary dependency loaded.
-    out_jsonl = out_path.with_suffix(".jsonl")
-    with out_jsonl.open("w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row) + "\n")
-    print(f"WROTE: {out_jsonl}")
+    _write_parquet(rows, out_path)
     return 0
 
 

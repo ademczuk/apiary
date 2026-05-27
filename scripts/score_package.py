@@ -1,46 +1,57 @@
-"""Score a single npm package@version and emit a JSON verdict.
+"""Score a single npm package and emit a JSON verdict.
+
+Takes a package directory or .tgz tarball, preprocesses it identically to
+training (package.json plus lifecycle scripts plus top-3 .js files by line
+count), runs a model (CodeBERT LoRA dir OR LightGBM model file), and prints
+JSON with score, decision, and an evidence list.
 
 Usage:
-    python scripts/score_package.py --package event-stream --version 3.3.6
-    python scripts/score_package.py --package left-pad --version 1.0.0 --model models/xgb-fallback.pkl
+    python scripts/score_package.py \
+        --model models/codebert-lora-v1/ \
+        --package /path/to/package_dir_or.tgz \
+        --gate-config modulewarden_gate/thresholds.yaml
 
-Output (one line of JSON to stdout):
-    {
-        "package": "event-stream",
-        "version": "3.3.6",
-        "score": 0.42,
-        "decision": "quarantine",
-        "evidence": ["new_install_script", "obfuscation_entropy_5.4"],
-        "model": "xgb-fallback-v1"
-    }
-
-The decision is computed from modulewarden_gate/thresholds.yaml.
-
-TODO:
-    - Fetch the tarball from the npm registry if not cached locally.
-    - Extract install scripts + index files; run extract_features over them.
-    - Run the chosen model; if CodeBERT not available, fall back to xgb.
-    - Map model outputs into the evidence strings the demo expects.
+    python scripts/score_package.py \
+        --no-model --package /path/to/pkg
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
+import tarfile
+import tempfile
+import zipfile
 from pathlib import Path
 
 import yaml
 
-THRESHOLDS_PATH = Path(__file__).resolve().parent.parent / "modulewarden_gate" / "thresholds.yaml"
+# Reuse preprocess helpers to keep training-time / inference-time identical.
+from scripts.extract_features import extract_row
+from scripts.preprocess import _record_for_package
+
+logger = logging.getLogger("apiary.score")
+
+DEFAULT_THRESHOLDS = (
+    Path(__file__).resolve().parent.parent / "modulewarden_gate" / "thresholds.yaml"
+)
 
 
-def load_thresholds(path: Path = THRESHOLDS_PATH) -> dict:
+def _setup_logging(verbose: bool = False) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
+def load_thresholds(path: Path = DEFAULT_THRESHOLDS) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def decide(score: float, thresholds: dict) -> str:
-    """Map a score in [0, 1] to allow / quarantine / block."""
+    """Map a [0, 1] score to allow / quarantine / block."""
     if score < thresholds["allow_below"]:
         return "allow"
     if score >= thresholds["block_at_or_above"]:
@@ -48,70 +59,211 @@ def decide(score: float, thresholds: dict) -> str:
     return "quarantine"
 
 
-def fetch_package_blob(package: str, version: str) -> str:
-    """Download the npm tarball and return the relevant text blob.
+def _ensure_package_dir(package: Path, work_dir: Path) -> Path:
+    """Return a directory containing the npm package contents.
 
-    TODO: real implementation:
-        import requests, tarfile, io
-        url = f"https://registry.npmjs.org/{package}/-/{package}-{version}.tgz"
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        with tarfile.open(fileobj=io.BytesIO(resp.content)) as tf:
-            # concatenate install scripts + index.js + main field target
-            ...
+    Accepts a directory (returned as-is) or a .tgz / .zip tarball, which is
+    unpacked into work_dir and the top-level package dir returned.
     """
-    return ""
+    if package.is_dir():
+        return package
+    if not package.is_file():
+        raise FileNotFoundError(f"package not found: {package}")
+
+    target = work_dir / "extracted"
+    target.mkdir(parents=True, exist_ok=True)
+    suffix = "".join(package.suffixes).lower()
+
+    if suffix.endswith(".tgz") or suffix.endswith(".tar.gz") or suffix == ".tar":
+        with tarfile.open(package, mode="r:*") as tf:
+            tf.extractall(target)
+    elif suffix == ".zip":
+        with zipfile.ZipFile(package, mode="r") as zf:
+            zf.extractall(target)
+    else:
+        raise ValueError(f"unsupported archive format: {package}")
+
+    # npm tarballs nest under a top-level `package/` directory
+    nested = target / "package"
+    if (nested / "package.json").exists():
+        return nested
+    # else: first child that contains package.json
+    for child in target.iterdir():
+        if (child / "package.json").exists():
+            return child
+    return target
 
 
-def score(package: str, version: str, model_path: Path | None) -> dict:
-    """Compute the verdict for one package@version.
+def _build_record(pkg_dir: Path) -> dict:
+    """Construct the same record shape preprocess.py emits."""
+    rec = _record_for_package(pkg_dir, archive_path=Path("inference"))
+    if rec is None:
+        raise ValueError(f"could not read package.json in {pkg_dir}")
+    rec.setdefault("label", 0)
+    return rec
 
-    For now this returns a STUB score so the demo pipeline runs end-to-end
-    before training finishes. A pinned set of known-bad packages return
-    high scores; everything else returns a low one. Replace with real model
-    inference once train_xgb_fallback.py and train_codebert.py produce
-    artifacts.
-    """
-    known_bad = {
-        "event-stream": ("3.3.6", 0.97, ["dependency_swap_flatmap_stream", "exfil_to_external_host"]),
-        "eslint-scope": ("3.7.2", 0.93, ["compromised_maintainer_token", "credential_exfiltration"]),
-        "ua-parser-js": ("0.7.29", 0.92, ["coin_miner_payload", "install_script_curl_pipe_sh"]),
-        "rc": ("1.2.9", 0.88, ["typosquat_pattern", "obfuscated_blob"]),
-        "coa": ("2.0.3", 0.86, ["typosquat_pattern", "post_install_dropper"]),
+
+def _heuristic_score(features: dict) -> tuple[float, list[str]]:
+    """Hand-coded scoring on the extract_features output."""
+    score = 0.0
+    evidence: list[str] = []
+
+    weights = {
+        "has_postinstall_script": 0.18,
+        "has_preinstall_script": 0.18,
+        "n_eval_calls": 0.04,
+        "n_function_constructor": 0.05,
+        "n_child_process_calls": 0.04,
+        "n_fs_writes_to_dotfiles": 0.20,
+        "n_obfuscated_identifiers": 0.02,
+        "n_dynamic_require": 0.03,
+        "has_binary_files": 0.10,
     }
-    info = known_bad.get(package)
-    if info and info[0] == version:
-        return {
-            "package": package,
-            "version": version,
-            "score": info[1],
-            "evidence": info[2],
-            "model": "stub-v0",
-        }
 
-    # TODO: real model inference here
+    if features.get("has_postinstall_script"):
+        score += weights["has_postinstall_script"]
+        evidence.append("postinstall_script_present")
+    if features.get("has_preinstall_script"):
+        score += weights["has_preinstall_script"]
+        evidence.append("preinstall_script_present")
+    if features.get("has_binary_files"):
+        score += weights["has_binary_files"]
+        evidence.append("binary_files_in_package")
+
+    n_dotfile = features.get("n_fs_writes_to_dotfiles", 0)
+    if n_dotfile:
+        score += min(weights["n_fs_writes_to_dotfiles"] * n_dotfile, 0.30)
+        evidence.append(f"fs_writes_to_dotfiles_{n_dotfile}")
+
+    n_eval = features.get("n_eval_calls", 0) + features.get("n_function_constructor", 0)
+    if n_eval:
+        score += min(0.05 * n_eval, 0.15)
+        evidence.append(f"eval_or_function_constructor_{n_eval}")
+
+    n_child = features.get("n_child_process_calls", 0)
+    if n_child:
+        score += min(weights["n_child_process_calls"] * n_child, 0.15)
+        evidence.append(f"child_process_calls_{n_child}")
+
+    entropy = features.get("entropy_install_script", 0.0) or 0.0
+    if entropy >= 5.0:
+        score += 0.15
+        evidence.append(f"install_script_entropy_{entropy:.2f}")
+    elif entropy >= 4.5:
+        score += 0.08
+        evidence.append(f"install_script_entropy_{entropy:.2f}")
+
+    if features.get("n_obfuscated_identifiers", 0) >= 5:
+        score += 0.10
+        evidence.append(f"obfuscated_identifiers_{features['n_obfuscated_identifiers']}")
+
+    n_b64 = features.get("n_base64_strings", 0)
+    if n_b64 >= 3:
+        score += 0.10
+        evidence.append(f"base64_strings_{n_b64}")
+
+    return min(score, 1.0), evidence
+
+
+def _load_predictor(model_path: Path | None):
+    """Return (predict_callable, label) or (None, 'heuristic') for --no-model."""
+    if model_path is None:
+        return None, "heuristic-v0"
+    from scripts.eval import load_model
+
+    return load_model(model_path)
+
+
+def _evidence_from_features(features: dict) -> list[str]:
+    """Surface notable feature signals as human-readable strings."""
+    out: list[str] = []
+    if features.get("has_postinstall_script"):
+        out.append("postinstall_script_present")
+    if features.get("has_preinstall_script"):
+        out.append("preinstall_script_present")
+    if features.get("has_binary_files"):
+        out.append("binary_files_in_package")
+    if features.get("n_fs_writes_to_dotfiles", 0):
+        out.append(f"fs_writes_to_dotfiles_{features['n_fs_writes_to_dotfiles']}")
+    if features.get("n_child_process_calls", 0):
+        out.append(f"child_process_calls_{features['n_child_process_calls']}")
+    if features.get("n_network_calls", 0):
+        out.append(f"network_calls_{features['n_network_calls']}")
+    entropy = features.get("entropy_install_script", 0.0) or 0.0
+    if entropy >= 4.5:
+        out.append(f"install_script_entropy_{entropy:.2f}")
+    if features.get("n_obfuscated_identifiers", 0) >= 5:
+        out.append(f"obfuscated_identifiers_{features['n_obfuscated_identifiers']}")
+    return out
+
+
+def score_package(
+    package_path: Path,
+    model_path: Path | None,
+    thresholds: dict,
+) -> dict:
+    """Return a verdict dict for one package."""
+    with tempfile.TemporaryDirectory(prefix="apiary-score-") as tmp:
+        work_dir = Path(tmp)
+        pkg_dir = _ensure_package_dir(package_path, work_dir)
+        record = _build_record(pkg_dir)
+        features = extract_row(record)
+
+        predict_fn, model_label = _load_predictor(model_path)
+        if predict_fn is None:
+            score, primary_evidence = _heuristic_score(features)
+            evidence = primary_evidence
+        else:
+            if model_label.startswith("lightgbm"):
+                score = float(predict_fn([record])[0])
+            else:
+                score = float(predict_fn([record.get("text", "")])[0])
+            evidence = _evidence_from_features(features)
+
+    decision = decide(score, thresholds)
+
     return {
-        "package": package,
-        "version": version,
-        "score": 0.02,
-        "evidence": [],
-        "model": "stub-v0",
+        "package": record.get("package_name"),
+        "version": record.get("version"),
+        "score": float(score),
+        "decision": decision,
+        "evidence": evidence,
+        "model": model_label,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package", required=True)
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--model", default=None, help="path to a trained model artifact")
-    parser.add_argument("--thresholds", default=str(THRESHOLDS_PATH))
+    parser.add_argument("--model", type=Path, default=None)
+    parser.add_argument("--package", required=True, type=Path)
+    parser.add_argument(
+        "--gate-config", type=Path, default=DEFAULT_THRESHOLDS, dest="gate_config"
+    )
+    parser.add_argument(
+        "--no-model",
+        action="store_true",
+        help="ignore --model and run heuristics only",
+    )
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    thresholds = load_thresholds(Path(args.thresholds))
-    model_path = Path(args.model) if args.model else None
+    _setup_logging(args.verbose)
+    thresholds = load_thresholds(args.gate_config)
 
-    verdict = score(args.package, args.version, model_path)
-    verdict["decision"] = decide(verdict["score"], thresholds)
+    model_path = None if args.no_model else args.model
+    if model_path and not model_path.exists():
+        logger.error("model path does not exist: %s", model_path)
+        return 1
+
+    try:
+        verdict = score_package(args.package, model_path, thresholds)
+    except FileNotFoundError as exc:
+        logger.error("%s", exc)
+        return 1
+    except (ValueError, OSError) as exc:
+        logger.error("scoring failed: %s", exc)
+        return 1
+
     print(json.dumps(verdict))
     return 0
 
