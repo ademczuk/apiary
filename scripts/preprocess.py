@@ -123,21 +123,195 @@ def _extract_lifecycle_files(pkg_dir: Path, scripts: dict) -> list[Path]:
     return referenced
 
 
-def _label_for_package(pkg_dir: Path, archive_path: Path) -> int:
-    """Infer label from path conventions in the figshare archive.
+_LABEL_CACHE: dict[str, dict[str, int]] | None = None
+_LABEL_UNCLASSIFIED: set[str] = set()
 
-    The figshare NPMStudy archive separates malicious and benign packages
-    under sibling directories; we look for the `malicious` keyword anywhere
-    in the path. Fall back to 0 (benign) if neither word is present.
+
+def _find_npmstudy_root(extract_dir: Path) -> Path | None:
+    """Locate the NPMStudy directory inside an extracted archive."""
+    direct = extract_dir / "NPMStudy"
+    if direct.is_dir():
+        return direct
+    for candidate in extract_dir.rglob("NPMStudy"):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _load_ground_truth(extract_dir: Path) -> dict[str, dict[str, int]]:
+    """Parse figshare ground-truth files into name -> {version: label}.
+
+    Sources, in order of precedence:
+    1. ``Data/cleaning/selected_benign_packages.txt`` for the curated
+       benign whitelist.
+    2. ``ToolDetection/DetectionResults/sap_DT`` reports for the broader
+       label set. We derive truth as
+       ``actual_benign = benign_reports - false_negatives + false_positives``
+       and ``actual_malicious = malicious_reports - false_positives +
+       false_negatives``. The sap_DT tool was chosen because it has the
+       largest benign coverage and the cleanest false-positive count.
+    3. ``Data/cleaning/package_label/analysis_summary.json`` as a final
+       malicious-only fallback (parsed via regex because the upstream
+       file is truncated in the release archive).
     """
-    parts_lower = [p.lower() for p in pkg_dir.parts]
-    if any("malicious" in p or "malign" in p or "mal_" in p for p in parts_lower):
-        return 1
-    if any(p == "benign" or "benign" in p for p in parts_lower):
-        return 0
-    # Heuristic fallback: archive filename hint
-    if "malicious" in archive_path.name.lower():
-        return 1
+    root = _find_npmstudy_root(extract_dir)
+    labels: dict[str, dict[str, int]] = {}
+    if root is None:
+        logger.warning("ground-truth: NPMStudy root not found under %s", extract_dir)
+        return labels
+
+    cleaning = root / "Data" / "cleaning"
+    benign_file = cleaning / "selected_benign_packages.txt"
+    if benign_file.is_file():
+        for raw in benign_file.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or "/" not in line:
+                continue
+            name, version = line.rsplit("/", 1)
+            labels.setdefault(name, {})[version] = 0
+        logger.info(
+            "ground-truth: parsed %d benign entries from %s",
+            sum(len(v) for v in labels.values()),
+            benign_file.name,
+        )
+
+    sap_dir = root / "ToolDetection" / "DetectionResults" / "sap_DT"
+    if sap_dir.is_dir():
+        ben = _read_json_keys(sap_dir / "benign_reports.json")
+        mal = _read_json_keys(sap_dir / "malicious_reports.json")
+        fp = _read_json_keys(sap_dir / "false_positives.json")
+        fn = _read_json_keys(sap_dir / "false_negatives.json")
+        gt_benign = (ben - fn) | fp
+        gt_malicious = (mal - fp) | fn
+        for key in gt_benign:
+            if "/" not in key:
+                continue
+            name, version = key.rsplit("/", 1)
+            labels.setdefault(name, {}).setdefault(version, 0)
+        for key in gt_malicious:
+            if "/" not in key:
+                continue
+            name, version = key.rsplit("/", 1)
+            # Malicious overrides benign when both fire on the same key
+            labels.setdefault(name, {})[version] = 1
+        logger.info(
+            "ground-truth: sap_DT yielded %d benign and %d malicious entries",
+            len(gt_benign),
+            len(gt_malicious),
+        )
+
+    summary = cleaning / "package_label" / "analysis_summary.json"
+    if summary.is_file():
+        try:
+            import re
+
+            text = summary.read_text(encoding="utf-8", errors="replace")
+            # The upstream file is sometimes truncated; regex tolerates that.
+            pattern = re.compile(
+                r'"package_name":\s*"([^"]+)"\s*,\s*"version":\s*"([^"]+)"'
+            )
+            added = 0
+            for match in pattern.finditer(text):
+                name, version = match.group(1), match.group(2)
+                bucket = labels.setdefault(name, {})
+                # Don't downgrade an existing benign label; the summary only
+                # lists malicious packages but parsing artefacts can sneak in.
+                if version not in bucket:
+                    bucket[version] = 1
+                    added += 1
+            if added:
+                logger.info(
+                    "ground-truth: analysis_summary added %d malicious entries",
+                    added,
+                )
+        except OSError as exc:
+            logger.debug("ground-truth: analysis_summary read failed: %s", exc)
+
+    total = sum(len(v) for v in labels.values())
+    label_counts = Counter(
+        label for versions in labels.values() for label in versions.values()
+    )
+    logger.info(
+        "ground-truth: %d packages indexed, distribution=%s",
+        total,
+        dict(label_counts),
+    )
+    return labels
+
+
+def _read_json_keys(path: Path) -> set[str]:
+    """Return the top-level keys from a JSON object, or empty set on failure."""
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("ground-truth: %s unreadable: %s", path.name, exc)
+        return set()
+    if isinstance(data, dict):
+        return set(data.keys())
+    return set()
+
+
+def _resolve_pkg_name_version(pkg_dir: Path) -> tuple[str, str]:
+    """Get (name, version) for a package directory.
+
+    Prefers the directory layout convention ``.../<name>/<version>/package/``
+    because it matches the keys in the figshare ground-truth files (which
+    encode scoped packages as ``@scope##name``). Falls back to parsing
+    ``package.json`` when the layout differs.
+    """
+    if pkg_dir.name == "package":
+        version_dir = pkg_dir.parent
+        name_dir = version_dir.parent if version_dir.parent else version_dir
+        return name_dir.name, version_dir.name
+    pkg_json = pkg_dir / "package.json"
+    try:
+        meta = json.loads(pkg_json.read_text(encoding="utf-8", errors="replace"))
+        return str(meta.get("name", pkg_dir.name)), str(meta.get("version", "0.0.0"))
+    except (OSError, json.JSONDecodeError):
+        return pkg_dir.name, "0.0.0"
+
+
+def _label_for_package(pkg_dir: Path, archive_path: Path) -> int:
+    """Look up a package label from the figshare ground-truth files.
+
+    Falls back to 0 (benign) when the package cannot be classified, and
+    logs the miss exactly once per package so silent constant-classifier
+    failures are detectable from the training logs.
+    """
+    global _LABEL_CACHE
+    if _LABEL_CACHE is None:
+        # archive_path is the zip; ground truth lives next to its extraction.
+        # Walk up from pkg_dir to find the extract root (containing NPMStudy).
+        ancestor: Path | None = pkg_dir
+        while ancestor is not None and ancestor != ancestor.parent:
+            if (ancestor / "NPMStudy").is_dir() or ancestor.name == "NPMStudy":
+                break
+            ancestor = ancestor.parent
+        if ancestor is None:
+            ancestor = pkg_dir
+        if ancestor.name == "NPMStudy":
+            ancestor = ancestor.parent
+        _LABEL_CACHE = _load_ground_truth(ancestor)
+
+    name, version = _resolve_pkg_name_version(pkg_dir)
+    versions = _LABEL_CACHE.get(name)
+    if versions is not None:
+        if version in versions:
+            return versions[version]
+        # Version-agnostic fallback when only one label exists for the name.
+        distinct = set(versions.values())
+        if len(distinct) == 1:
+            return distinct.pop()
+
+    key = f"{name}/{version}"
+    if key not in _LABEL_UNCLASSIFIED:
+        _LABEL_UNCLASSIFIED.add(key)
+        logger.warning(
+            "ground-truth: no label for %s; defaulting to benign (path=%s)",
+            key,
+            pkg_dir,
+        )
     return 0
 
 
