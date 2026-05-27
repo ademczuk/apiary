@@ -4,6 +4,38 @@
 
 Rule: honest answers beat aspirational answers. The judging panel includes a PhD in probabilistic forecasting and a 25-year materials COO. They will both spot weak reasoning.
 
+The first five entries are the hostile-underwriter pushbacks and the senior-architect questions. If we get cornered, these are the ones to rehearse.
+
+---
+
+## Q0a. Where is your evidence Apiary actually reduces claim frequency, not just controls a 15 percent incident category?
+
+We are not claiming reduction yet. We are providing the evidence artifact that lets you measure reduction over your first cohort. Apiary's value at year 0 is auditability and policy enforceability: every install routes through a deterministic gate, every decision lands in a Control Evidence Memo with rule references and sign-off trail, and the audit log is queryable from the policyholder portal. At year 1, with your claims data, you will have measured the frequency delta on the supply-chain incident class for that cohort. That is the underwriting input that earns durable premium tiers. Today's pitch is the control class, not the actuarial proof. We have the data-collection apparatus. You have the actuarial team. Together you measure the reduction the public industry reports are pointing at.
+
+---
+
+## Q0b. Coalition's 12.5 percent MDR premium credit is for a control class with years of claims data. Apiary has zero. Why should we underwrite this?
+
+Right, and that is the same answer in reverse. MDR has ten years of actuarial data behind that 12.5 percent number. We are offering you the data-collection apparatus for the next ten years of supply-chain controls. The 12.5 percent figure is what you can defensibly underwrite at year 0 based on the control-class match: a verifiable pre-install gate that produces an audit artifact every time it fires, mapped to ISO 27001 A.8.28 and NIST SSDF PS.3.1. The bigger number, possibly 25 to 35 percent, emerges as your portfolio data confirms reduction on the eligible segment. We are not asking you to price what Coalition prices. We are asking you to price what the control class actually does on your book, and the floor for that is the public reference point.
+
+---
+
+## Q0c. What is the latency cost vs direct registry access?
+
+Two paths through the proxy, both measured. Cached metadata fetch returns in under 50 milliseconds; the cache TTL is 1 hour and metadata cache hits are the common case because npm install resolves the same dependency graph repeatedly within a build. Tarball serve from the on-disk cache is under 100 milliseconds plus the disk read, dominated by the size of the tarball itself. First-time tarball fetch is the upstream registry round-trip plus the policy evaluation, which is sub-millisecond once the integrity hash and lifecycle scripts are parsed. The LLM audit runs out of band against the cache-seeder queue, not in the install hot path. End to end on a warm cache, the install completes faster than direct access to registry.npmjs.org because the proxy is on-prem and the upstream is across the Atlantic. Cold cache, the cost is one extra round-trip and a few milliseconds of policy evaluation.
+
+---
+
+## Q0d. How does this work with private registries and scoped packages?
+
+Scoped packages: the proxy already speaks the `/@{scope}/{name}` and `/@{scope}/{name}/-/{file}.tgz` endpoints, so `@yourcompany/internal-lib` resolves through the gate the same way `lodash` does. Private registries: the proxy supports a configurable upstream, so you can chain it. The pattern is to point Apiary at your existing private registry (Verdaccio, Artifactory, GitHub Packages, JFrog) as the upstream, and have npm point at Apiary. Internal packages then ride the same policy gate as public packages, with the same Control Evidence Memo for each install. The auth stub at `POST /-/v1/login` accepts any credentials today; a production deployment would proxy the upstream's auth flow.
+
+---
+
+## Q0e. What is the multi-tenant story?
+
+Single-tenant for the v2.0 ship line. The gate, the cache, the policy file, and the audit log are all scoped to one Apiary instance, and the deployment recommendation is one instance per organizational unit. Multi-tenancy is the enterprise tier item: one proxy serving multiple organizations needs per-tenant cache partitioning, per-tenant policy overlays, and per-tenant audit log isolation. None of those are conceptually hard; they are all in the SOC 2 prep work queued for Q4. For now, the honest framing is that you run one Apiary per customer or per business unit, and the operational footprint is small enough that this is fine. The proxy is one Python process and a cache directory.
+
 ---
 
 ## Q1. Is the model better than Snyk's existing tools?

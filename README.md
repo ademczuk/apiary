@@ -1,12 +1,13 @@
-# Apiary: a self-hosted npm registry gate for the insurance supply chain
+# Apiary
 
-Apiary is an npm registry proxy plus policy gate plus quarantine workflow. It
-sits between a developer (or a CI pipeline) and the public npm registry,
-caches every tarball it serves, and applies a configurable allow / quarantine
-/ block decision before any byte reaches a developer machine. Built for the
-Apiary Zero-One Hack and aimed at insurance underwriters and brokers (UNIQA,
-Munich Re) who care about premium-grade signal on third-party code that gets
-pulled into the office tomorrow morning.
+Apiary is a self-hosted npm registry proxy that gates package installs against
+deterministic security policy before the tarball ships to your developer.
+Think Verdaccio plus Snyk's intentions plus a SOC 2 evidence pipeline, in one
+binary.
+
+Built for the Apiary Zero-One Hack and aimed at insurance underwriters and
+brokers (UNIQA, Munich Re) who care about premium-grade signal on the
+third-party code that gets pulled into the office tomorrow morning.
 
 ## Why this shape
 
@@ -34,40 +35,45 @@ Apiary's v2 architecture is that gate. Four pieces:
    context for the audit rubric and 75% for the package code. Three
    backends ship in-tree: OpenAI (`gpt-4o-mini`), Ollama (local
    `deepseek-coder:6.7b` or any abliterated variant), and Dwarfstar-style
-   OpenAI-compatible endpoints. The cache seeder
-   (`apiary_cache.seed`) pre-audits a few thousand top packages so the
-   common case is a cache hit at install time.
+   OpenAI-compatible endpoints. The cache seeder (`apiary_cache.seed`)
+   pre-audits a few thousand top packages so the common case is a cache
+   hit at install time.
 
 The CodeBERT classifier from v1 is still in the tree under `scripts/`,
-`modulewarden_gate/`, and `bumblebee_bridge/`, and remains usable as one
-signal among several. It is no longer the centerpiece.
+`modulewarden_gate/`, and `bumblebee_bridge/`, and remains useful as one
+supplementary signal feeding the audit pipeline. It is no longer the
+centerpiece. A score is not a control. A rule is.
 
-## Quick start
+## Quickstart
+
+Five commands from clone to a working gate.
 
 ```bash
-# Python 3.11, uv recommended
-uv venv
+git clone https://github.com/ademczuk/apiary
+cd apiary
+uv venv && source .venv/bin/activate
 uv pip install -e .
-
-# Initialise the quarantine policy
-python -m apiary_quarantine.workflow validate
-
-# Seed the proxy cache with the top 2000 packages (heuristics + policy only)
-python -m apiary_cache.seed --count 2000 --workers 8
-
-# Or seed with full LLM audit via local Ollama
-python -m apiary_cache.seed --count 200 --workers 2 \
-    --audit-backend ollama --audit-model deepseek-coder:6.7b
-
-# Run the proxy on port 4873
-python -m apiary_proxy.proxy --port 4873 \
-    --cache-dir data/proxy-cache \
-    --upstream https://registry.npmjs.org
-
-# Point npm at it
-npm config set registry http://127.0.0.1:4873
+python -m apiary_proxy.proxy --port 4873 --cache-dir data/proxy-cache
+# then in another terminal:
+npm config set registry http://localhost:4873/
 npm install lodash
 ```
+
+Watch the gate log. Every install fires the policy engine. Allowed installs
+return 200, quarantined installs return 202 with a `Retry-After` header,
+blocked installs return 451.
+
+To replay the September 2025 postmark-mcp incident against the same policy
+engine and render an insurance-grade Control Evidence Memo:
+
+```bash
+python -m demo.run_incident_replay --incident postmark-mcp-1.0.16
+```
+
+Three incident reconstructions ship in-tree: `postmark-mcp-1.0.16` (the
+malicious release), `postmark-mcp-1.0.12` (the legitimate prior version),
+and `lodash-4.17.21` (a clean popular-package baseline). The memo lands in
+`demo/outputs/`.
 
 ## Endpoint summary
 
@@ -99,11 +105,39 @@ python -m apiary_quarantine.workflow validate
 orphaned. Wire it into a git pre-commit hook to keep the audit trail
 honest.
 
+## What's NOT included
+
+The v2.0 ship line is honest about what we punted. Judges who poke at the
+repo will find these. We'd rather you find them in the README than in the
+code.
+
+- **Source-match rule** (`apiary_policy/rules.py`). The `source_match` rule
+  is a stub that always returns False. The demo replay short-circuits this
+  for the three baselines with an explicit allowlist. Closing it out
+  requires attesting publisher-to-repo provenance against a known set of
+  signed commits or release artifacts; that work is queued for Q3 2026.
+- **Figshare label fix**. The v1 classifier's training corpus has one
+  mislabeled benign batch from the figshare NPM Malicious Package Study
+  that we identified during model evaluation. The fix is documented but
+  not yet applied; rerunning the LoRA fine-tune is a Leonardo job we did
+  not schedule before the ship date.
+- **LRU cache eviction**. The proxy cache uses simple TTL eviction (1h
+  metadata, persistent tarballs). LRU eviction with a configurable disk
+  quota is the right shape for production; for the hackathon we leaned
+  on "disks are big" and shipped TTL.
+- **Multi-tenant proxy**. One Apiary instance serves one organizational
+  unit today. Multi-tenant deployments need per-tenant cache partitioning,
+  policy overlays, and audit log isolation. Conceptually simple, queued
+  for the SOC 2 prep work in Q4.
+- **Production-grade auth on `POST /-/v1/login`**. The stub accepts any
+  credentials. A production deployment proxies the upstream registry's
+  auth flow; we have not implemented that.
+
 ## v1 classifier (still present)
 
 The CodeBERT LoRA fine-tune and LightGBM fallback are still in the tree
-because they remain useful as a probabilistic signal for packages we have
-not yet audited. The training pipeline targets the figshare NPM Malicious
+because they remain useful as a probabilistic signal feeding the audit
+pipeline. The training pipeline targets the figshare NPM Malicious
 Package Study (210K labelled releases, CC BY 4.0). See
 `scripts/train_codebert.py` and `slurm/train.slurm`.
 
@@ -114,7 +148,9 @@ Package Study (210K labelled releases, CC BY 4.0). See
 - `apiary_quarantine/` policy file + rationale workflow with CLI
 - `apiary_auditors/` LLM audit prompt builder + OpenAI / Ollama / Dwarfstar backends
 - `apiary_cache/` cache seeder that pre-audits the top-N popular packages
-- `scripts/` v1 data and classifier pipeline (still functional)
+- `demo/` incident replay driver, three faithful reconstructions, expected outputs
+- `pitch/` slide deck, Q&A prep, insurance economics one-pager, video script
+- `scripts/` v1 data and classifier pipeline (still functional, feeds audit)
 - `modulewarden_gate/` v1 FastAPI scoring endpoint (still functional)
 - `bumblebee_bridge/` v1 stdin NDJSON consumer for Bumblebee inventory scans
 - `data/patterns/` attack catalogue used for synthetic training data
