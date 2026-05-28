@@ -40,9 +40,13 @@ Apiary's v2 architecture is that gate. Four pieces:
    hit at install time.
 
 The CodeBERT classifier from v1 is still in the tree under `scripts/`,
-`modulewarden_gate/`, and `bumblebee_bridge/`, and remains useful as one
-supplementary signal feeding the audit pipeline. It is no longer the
-centerpiece. A score is not a control. A rule is.
+`modulewarden_gate/`, and `bumblebee_bridge/`. It is labeled as legacy
+supplementary signal in v3, not the primary training target. A score
+is not a control. A rule is.
+
+For the v3 audit model we abliterate + LoRA fine-tune a 32B-70B class
+model (GLM 5.1 32B or DeepSeek 4 Pro). See "Training the audit model"
+below.
 
 ## Quickstart
 
@@ -133,12 +137,57 @@ code.
   credentials. A production deployment proxies the upstream registry's
   auth flow; we have not implemented that.
 
-## v1 classifier (still present)
+## Training the audit model
+
+Apiary's LLM audit backend can be swapped out per deployment. For the
+v3 reference model we abliterate and SFT fine-tune GLM 5.1 32B (or
+DeepSeek 4 Pro) on the figshare NPM Malicious Package Study plus 50K
+synthetic examples generated from our 22-pattern attack catalog.
+
+Abliteration removes refusal cascades on security-analysis prompts via
+the Failspy refusal-direction orthogonalization technique
+(arXiv:2406.11717). The SFT fine-tune teaches the model to produce
+structured JSON verdicts on npm packages.
+
+Training pipeline (Leonardo or equivalent 64x H100 cluster):
+
+```bash
+# 1. Convert corpus to instruction format
+python -m apiary_train.data_prep \
+    --figshare-archive data/raw/figshare/63179326_NPMStudy.zip \
+    --synthetic-dir data/synthetic/v1 \
+    --output data/sft/v1.jsonl \
+    --max-len 8192 --shuffle --seed 42
+
+# 2. Distributed train (8 nodes x 8 H100)
+BASE_MODEL=THUDM/glm-5.1-32b-base sbatch slurm/abliterate_then_sft.slurm
+
+# 3. Held-out eval
+python -m apiary_train.eval \
+    --model models/apiary-glm-5.1-32b-base-v1 \
+    --base-model THUDM/glm-5.1-32b-base \
+    --test-data data/sft/v1.test.jsonl
+```
+
+Rehearsal pipeline (cheap, validates correctness on a 1.5B model in
+about thirty minutes on a single GPU):
+
+```bash
+python -m apiary_train.rehearsal \
+    --base-model Qwen/Qwen2.5-Coder-1.5B --quick
+```
+
+Production handoff: the trained LoRA adapter is loaded by
+`apiary_auditors.llm_audit.ApiaryFineTunedBackend` (factory name
+`apiary-finetuned`). The proxy switches to it via the audit-backend
+config alongside the existing `openai` / `ollama` / `dwarfstar`
+backends.
+
+## v1 classifier (legacy / supplementary)
 
 The CodeBERT LoRA fine-tune and LightGBM fallback are still in the tree
-because they remain useful as a probabilistic signal feeding the audit
-pipeline. The training pipeline targets the figshare NPM Malicious
-Package Study (210K labelled releases, CC BY 4.0). See
+as a supplementary probabilistic signal that can feed the audit
+pipeline. They are no longer the primary training target. See
 `scripts/train_codebert.py` and `slurm/train.slurm`.
 
 ## Layout
@@ -148,6 +197,7 @@ Package Study (210K labelled releases, CC BY 4.0). See
 - `apiary_quarantine/` policy file + rationale workflow with CLI
 - `apiary_auditors/` LLM audit prompt builder + OpenAI / Ollama / Dwarfstar backends
 - `apiary_cache/` cache seeder that pre-audits the top-N popular packages
+- `apiary_train/` v3 abliteration + LoRA SFT pipeline (primary training story)
 - `demo/` incident replay driver, three faithful reconstructions, expected outputs
 - `pitch/` slide deck, Q&A prep, insurance economics one-pager, video script
 - `scripts/` v1 data and classifier pipeline (still functional, feeds audit)

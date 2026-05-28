@@ -13,6 +13,11 @@ dependencies = [
     "peft>=0.13",
     "accelerate>=0.34",
     "datasets>=3.0",
+    "trl>=0.11",
+    "bitsandbytes>=0.43 ; platform_system != 'Windows'",
+    # flash-attn must be installed manually after torch is in place:
+    #     pip install flash-attn>=2.6 --no-build-isolation
+    # H100 nodes on Leonardo / equivalent ship with it preinstalled.
     "scikit-learn>=1.5",
     "lightgbm>=4.5",
     "mapie>=0.9",
@@ -66,10 +71,16 @@ packages = [
     "apiary_quarantine",
     "apiary_auditors",
     "apiary_cache",
+    "apiary_train",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
 "apiary_quarantine/templates" = "apiary_quarantine/templates"
+"apiary_train/harmful_prompts.json" = "apiary_train/harmful_prompts.json"
+"apiary_train/harmless_prompts.json" = "apiary_train/harmless_prompts.json"
+"apiary_train/sft_config_glm.yaml" = "apiary_train/sft_config_glm.yaml"
+"apiary_train/sft_config_deepseek.yaml" = "apiary_train/sft_config_deepseek.yaml"
+"apiary_train/accelerate_multinode.yaml" = "apiary_train/accelerate_multinode.yaml"
 
 [tool.ruff]
 line-length = 100

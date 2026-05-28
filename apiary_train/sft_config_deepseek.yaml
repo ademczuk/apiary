@@ -1,0 +1,36 @@
+# SFT overrides for DeepSeek 4 Pro (~70B).
+# DeepSeek's MoE layers use a slightly different projection naming in
+# some checkpoints; the safe superset target list below works on both
+# the dense and the MoE variants.
+
+base_model: deepseek-ai/DeepSeek-V4-Pro-Base
+max_seq_len: 8192
+# 70B forces a small per-device batch on H100s even at bf16
+batch_size: 1
+grad_accum: 32
+epochs: 1
+lr: 5.0e-5
+warmup_ratio: 0.03
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+  # MoE expert routing weights, present in some DeepSeek checkpoints
+  - w1
+  - w2
+  - w3
+bf16: true
+gradient_checkpointing: true
+packing: true
+save_steps: 200
+eval_steps: 200
+logging_steps: 10
+optim: adamw_torch
+load_in_4bit: false

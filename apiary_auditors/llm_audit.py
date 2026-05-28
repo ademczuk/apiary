@@ -447,6 +447,108 @@ class DwarfstarBackend(AuditBackend):
         return parse_audit_response(raw)
 
 
+class ApiaryFineTunedBackend(AuditBackend):
+    """Local inference against an apiary-trained model from apiary_train.
+
+    Loads either a full HF model directory or a base model plus a LoRA
+    adapter produced by ``apiary_train.sft_lora``. Heavy: pins the model
+    in GPU/CPU memory for the lifetime of the process, so one instance
+    per worker is the right pattern.
+    """
+
+    name = "apiary-finetuned"
+
+    def __init__(
+        self,
+        model_path: str,
+        base_model: str | None = None,
+        max_new_tokens: int = 512,
+        temperature: float = 0.1,
+        dtype: str = "bfloat16",
+        device_map: str = "auto",
+    ) -> None:
+        self.model_path = model_path
+        self.base_model = base_model
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self.dtype = dtype
+        self.device_map = device_map
+        self._model: Any = None
+        self._tokenizer: Any = None
+
+    def _load(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            import torch  # type: ignore
+            from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "transformers + torch required for ApiaryFineTunedBackend"
+            ) from exc
+
+        dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
+        torch_dtype = dtype_map.get(self.dtype, torch.bfloat16)
+
+        adapter_dir = Path(self.model_path)
+        is_adapter = (adapter_dir / "adapter_config.json").exists()
+        tokenizer_source = self.base_model if (is_adapter and self.base_model) else self.model_path
+        self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        if is_adapter:
+            if not self.base_model:
+                raise ValueError("ApiaryFineTunedBackend(adapter) requires base_model")
+            try:
+                from peft import PeftModel  # type: ignore
+            except ImportError as exc:
+                raise RuntimeError("peft required to load an adapter") from exc
+            base = AutoModelForCausalLM.from_pretrained(
+                self.base_model,
+                torch_dtype=torch_dtype,
+                device_map=self.device_map,
+                trust_remote_code=True,
+            )
+            self._model = PeftModel.from_pretrained(base, self.model_path)
+        else:
+            self._model = AutoModelForCausalLM.from_pretrained(
+                self.model_path,
+                torch_dtype=torch_dtype,
+                device_map=self.device_map,
+                trust_remote_code=True,
+            )
+        self._model.eval()
+        logger.info("apiary-finetuned model loaded: %s", self.model_path)
+
+    def audit(self, prompt: AuditPrompt) -> AuditResult:
+        self._load()
+        import torch  # type: ignore
+
+        system = (
+            "You are an npm supply-chain security auditor. Reply with one "
+            "JSON object matching the schema."
+        )
+        text = f"{system}\n\n{prompt.to_text()}"
+        inputs = self._tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=8192,
+        ).to(self._model.device)
+        with torch.no_grad():
+            out = self._model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=self.temperature > 0.0,
+                temperature=max(self.temperature, 1e-5),
+                pad_token_id=self._tokenizer.pad_token_id,
+            )
+        new_tokens = out[0][inputs["input_ids"].shape[1]:]
+        raw = self._tokenizer.decode(new_tokens, skip_special_tokens=True)
+        return parse_audit_response(raw)
+
+
 def get_backend(name: str, **kwargs: Any) -> AuditBackend:
     """Factory for CLI / cache seeder use."""
     name = name.lower()
@@ -456,4 +558,6 @@ def get_backend(name: str, **kwargs: Any) -> AuditBackend:
         return OllamaBackend(**kwargs)
     if name == "dwarfstar":
         return DwarfstarBackend(**kwargs)
+    if name in ("apiary", "apiary-finetuned", "finetuned"):
+        return ApiaryFineTunedBackend(**kwargs)
     raise ValueError(f"unknown audit backend: {name}")
