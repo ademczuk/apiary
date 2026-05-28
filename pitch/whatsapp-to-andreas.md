@@ -37,11 +37,11 @@ Counterintuitive but agent argues: coder-base models don't have heavy RLHF refus
 
 *Your call: which model do we default the slurm script to?*
 
-- *A: Llama 3.1 8B abliterated* — Pantheon's recommendation, safest, leaves 64-GPU headroom for parallel eval and synthetic data generation
-- *B: GLM 5.1 32B abliterated* — your original ask, runnable in 6-9h on 8 nodes, no buffer for mistakes
+- *A: Llama 3.1 8B abliterated* - Pantheon's recommendation, safest, leaves 64-GPU headroom for parallel eval and synthetic data generation
+- *B: GLM 5.1 32B abliterated* - your original ask, runnable in 6-9h on 8 nodes, no buffer for mistakes
 - *C: All three configs, you decide Friday based on case-reveal scope*
 
-I defaulted to *C* in the slurm script comments — uncomment the right line at submit time. Tell me if you want a different default and I'll repoint.
+I defaulted to *C* in the slurm script comments - uncomment the right line at submit time. Tell me if you want a different default and I'll repoint.
 
 *Pre-flight before sbatch (do this on the dev machine Saturday morning)*
 
