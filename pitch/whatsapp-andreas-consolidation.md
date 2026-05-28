@@ -1,72 +1,76 @@
-# WhatsApp message to Andreas - 2026-05-28 (real-world data pivot)
+# WhatsApp message to Andreas - 2026-05-28 (post-OOM recovery)
 
 Copy-paste below the line. WhatsApp markdown.
 
 ---
 
-*Major pivot - your GHSA scraper changes the math*
+*Post-OOM status + the corpus we have right now*
 
-I went back and read your repo more carefully. You shipped `finetune/scripts/scrape-cases.mjs` + `scraped-case.schema.json` + `scrape-config.json` + the rate-limit hardening and OSV enrichment. That is production-grade real-world data ingestion infrastructure. apiary's training pipeline needed real data; you already built the source.
+Workstation OOM'd while three agents were running. Killed the Datadog full-extract job mid-flight. Recovery is clean: smoke tests still PASS, no malicious code executed (verified no node_modules, no postinstall scripts ran, version-pair extractions are inert filesystem files), disk freed.
 
-*What I just did*
+*What survived the OOM* (commit 6cb7394 on apiary main):
 
-Ran your scraper from /c/Projects/_Jobs/Collaborations/Andrew/_mw-clone with my gh CLI token: 600 GHSA advisories fetched in 30 seconds, normalized 100 into `modulewarden.scraped_case.v1` JSONL. 171 KB of structured real-world npm vulnerability cases with GHSA + CVE IDs, severity tiers, CWE classifications, affected version ranges, first-patched versions, candidate-versions inference (likely_affected + benign neighbors), npm packument metadata, and OSV cross-references.
+- *2,305 real GHSA cases* normalized to SFT format (1,844 train + 230 val + 231 test). All anchored to actual advisory IDs, CWE classifications, version ranges, npm packument metadata. 4.65 MB JSONL.
+- *824 incident_replay cases* in there (GHSA type=malware: confirmed malicious packages, not just CVE-tagged bugs) + 1,481 cve_diff cases.
+- *89 version-pair extractions* (got 40 MB of inert npm package metadata + diff data before OOM). For each: unpatched + patched tarballs fetched + safely extracted + structural diff computed. The "code + diff" input format you described.
+- *9 new Python source files* shipped (no execution, no install side effects):
+  - `apiary_train/version_pair_extractor.py` - the code+diff extraction core
+  - `apiary_train/raw_format_builder.py` - VersionPair -> classification-head training records (your "raw format")
+  - `apiary_train/agentic_format_builder.py` - VersionPair -> simulated tool-use trajectories (your "agentic format")
+  - `apiary_train/datadog_adapter.py` + `apiary_train/ossv_adapter.py` - normalize Datadog and OSSF corpora to scraped-case.v1
+  - `scripts/build_eval_matrix.py` - 2x2 test-set builder for your evaluation matrix
+  - `scripts/extract_version_pairs.py` - CLI for the version pair extractor
+  - `scripts/fetch_datadog_dataset.py` + `scripts/fetch_ossf_malicious_packages.py` - fetchers (NOT yet run at scale)
 
-Wired the bridge in apiary at `apiary_train/scraped_case_adapter.py` (260 LOC). One scraped-case.v1 record in, one SFT instruction-tuning record out, stratified train/val/test split by severity. Sample output verdict for `@haxtheweb/haxcms-nodejs` (GHSA-x3x5-7h4h-gwxg, "Mass Token Exfiltration and Cross-Tenant Hijack", CWE-79/522/922, severity high): block verdict, Class A threat label, confidence 0.88, reasoning anchored to the GHSA advisory and CWE classification. That is the kind of data the H100 run wants.
+*What did NOT survive* (need to redo more carefully):
 
-Pipeline now: your `scrape-cases.mjs` -> `scraped-cases.jsonl` -> apiary `scraped_case_adapter.py` -> `ghsa-cases-v1-{train,val,test}.jsonl` -> apiary `sft_lora.py` on H100. End-to-end validated on 100 cases.
+- Datadog full-extract: clone partially complete, OOM killed the extraction. We have the fetcher code, just need to run it with smaller batches.
+- OSSF malicious-packages full clone: the OSV records weren't ingested. We have the adapter code, just need to git clone with sparse-checkout.
 
-*Honest recalibration on the repo math*
+*Web research confirmed additional data sources I'll fetch carefully*:
 
-Your MW main is at 96 commits, ~9,150 LOC TypeScript, with the GHSA scraper, OSV enrichment, npm packument inference, rate-limit handling, advisory deduplication, version inference (likely_affected + first_patched + benign neighbors), and a schema-validated case contract. Plus the TASK-1.10 verdict policy and admin override, plus the per-job Docker container-runner, plus the Prisma decision lineage repos, plus pg-boss orchestration. That is the production stack.
+- *Datadog malicious-software-packages-dataset*: ~17,600 real npm packages, Apache-2.0, encrypted with password "infected" specifically to prevent accidental execution. Extracting in 100-package batches is safe; extracting all 17K at once is what OOM'd us.
+- *OSV GCS bulk*: `gs://osv-vulnerabilities/npm/all.zip` - no auth, contains ~190K MAL-prefixed records from 2025 alone
+- *Mendeley dataset 6tc8wrp62g*: CC-BY-4.0, March 2026 release, JS source files
+- *MITRE CVElistV5 + NVD REST API*: public domain CVE-tagged npm records
 
-apiary has 25 commits, ~14,200 LOC Python now. It has the demo runtime (postmark-mcp replay), the H100 abliteration + SFT LoRA training stack, the synthetic data generator, the multi-ecosystem registries (npm + PyPI + Composer), the insurance pitch materials, and now the bridge to consume your scraped cases.
+Major fresh incidents we should add to demo collection (newer than postmark-mcp Sep 2025):
+- *Axios March 2026*: 100M+ weekly downloads affected, CISA advisory, versions 1.14.1 + 0.30.4 + plain-crypto-js@4.2.1
+- *Mini Shai-Hulud / TanStack May 2026*: 17 days ago, GHSA-g7cv-rxg3-hmpx, self-spreading
+- *Shai-Hulud 2.0 Nov 2025*: 795 packages in one wave
 
-*The corrected consolidation read*
+These would crush the demo because they're current press-cycle incidents UNIQA judges recognize.
 
-This is not "apiary vs ModuleWarden". This is two halves of one product, with you owning the production half and me owning the training + demo + pitch half. Your scraper feeds my training pipeline. My training output feeds your model endpoint. We should describe it that way to UNIQA judges.
+*Real-world corpus we have NOW*:
+- GHSA: 2,305 cases (committed to SFT corpus)
+- Version pairs: 89 extracted (code + structural diff)
+- figshare NPMStudy: 13.5K labeled (existing)
+- Synthetic: 50K (existing)
 
-Specifically for Sunday: I think the pitch becomes "Andrew built the live demo, the SFT training stack, and the insurance evidence pipeline; Andreas built the production proxy, the durable decision lineage, and the real-world GHSA data ingestion. Both repos live in the open and they compose at the model-endpoint boundary." That is a stronger story than "we ship one repo and reference the other".
+*Could add carefully (not OOM the machine)*:
+- Datadog: ~17,600 npm packages, extract in 100-package batches
+- OSSF: ~213K npm OSV records, sparse-checkout
+- Total potential: ~245K records
 
-*What I still need from you (priority order)*
+*Open questions for you (priority order)*:
 
-1. *Scrape more data*: I ran with --limit 100 to validate. For the real H100 run we want the full 600+ advisories' worth of cases (probably 1000-3000 final records after expanding by vulnerable package). Run `node finetune/scripts/scrape-cases.mjs --concurrency 6 --partial-on-rate-limit` against your GITHUB_TOKEN tonight. Output lands in `finetune/corpus/scraped-cases.jsonl`. I will pull it into apiary and re-run the bridge.
-2. *Drive folder fix*: the 401 still blocks the finetune-data folder. "Anyone with link" OR add joey.lucia@gmail.com OR drop the data into your repo under finetune/corpus/ and I pull it from there.
-3. *golden-cases.json review*: I noticed `finetune/corpus/golden-cases.json` references `finetune/examples/version-diff/audit-dossier.json` and `audit-report.json`. Those files do not exist in the checkout. Either you have them locally and they did not get pushed, or TASK-1.13 (incident-replay eval harness) is still in flight. If you have them, push them; if not, want me to generate dossier+report stubs from apiary's Control Evidence Memo template?
-4. *Model default for slurm*: still A=Llama 3.1 8B (Pantheon recommended), B=GLM 5.1 32B (your original ask), or C=defer to Friday. The 100-case dataset is enough to validate the adapter; for the real run we need a corpus call and a model call together.
-5. *Accept the collaborator invitation* at github.com/ademczuk/apiary/invitations
-6. *Dwarfstar endpoint*: URL + model name. Drops into APIARY_DWARFSTAR_URL + APIARY_DWARFSTAR_MODEL env vars.
+1. *OOM postmortem*: my agent tried to extract 17K Datadog tarballs in one go. For the H100 run, do you want me to extract a sample (say 2K) or skip Datadog entirely and rely on the 2,305 GHSA cases + figshare + synthetic?
+2. *Eval matrix arms*: 2 cells (A + B) or all 4? Affects compute budget on Sunday.
+3. *Model default for slurm*: A=Llama 3.1 8B (Pantheon recommendation), B=GLM 5.1 32B (your original ask), or C=defer to Friday?
+4. *Drive 401 fix*: still pending. Permissions or alternative path?
+5. *Cherrypick acceptance*: drop the 4K LOC apiary contribution into your `finetune/` directory or keep as a sibling apiary repo that MW invokes?
+6. *Accept the collaborator invitation*: github.com/ademczuk/apiary/invitations
 
-*New apiary docs your CC agent can read*
+*Updated honest podium odds*: ~55-60% with current state (2,305 real GHSA cases + 89 paired diffs + synthetic + apiary's training stack + your production architecture). Adding Datadog in 2K-sample batches without re-OOM'ing pushes to ~60-65%. UNIQA outreach landing one real claim brings it to ~70%.
 
-- `FOR_ANDREAS_AGENT.md` (root, 553 lines): canonical entry, Sunday decision framework
-- `CLAUDE.md`: lean operating context
-- `AGENT_PRIMER.md`: repo map, common tasks, smoke commands, cross-repo nav
-- `docs/CAPABILITY_MATRIX.md`: 12-category side-by-side with file:line citations in BOTH repos
-- `docs/SUBMIT_APIARY.md`: per-capability evidence
-- `docs/ENHANCE_MODULEWARDEN.md`: concrete TS port plans
-- `apiary_train/scraped_case_adapter.py`: the bridge that consumes your scraper output
-
-Point your CC agent at apiary and ask it to read `FOR_ANDREAS_AGENT.md` then `apiary_train/scraped_case_adapter.py`. It will see how the two repos compose.
-
-*Updated honest win probability*
-
-With your GHSA scraper feeding apiary's training pipeline + your production policy engine alongside apiary's demo + insurance pitch, the math improves materially:
-- Current state (paired pitch): ~55-60% podium
-- + your scraper running to full corpus tonight: ~60-65%
-- + UNIQA outreach landing one anonymized case: ~65-70%
-- + Sunday demo clean execution + your CC agent reading the docs: ~70%
-
-That is the highest honest number we have seen in this thread. The reason is your scraper turned the H100 run from "training on synthetic + figshare" into "training on synthetic + figshare + 600+ live GHSA cases with real CWE labels and version diffs". UNIQA judges respond to data tied to real claim drivers, and CWE-classified GHSA advisories are exactly that anchor.
-
-Repo: https://github.com/ademczuk/apiary (commit eae353b - 18 commits on main).
-Live site: https://ademczuk.github.io/modulewarden-website/.
+Repo: https://github.com/ademczuk/apiary (commit 6cb7394). All smoke tests PASS. Disk safe.
 
 ---
 
 ## Notes for me (not for Andreas)
 
-- File at `apiary/pitch/whatsapp-andreas-consolidation.md`, marker-clean
-- ~750 words
-- Tone: honest pivot, credits his scraper work specifically and concretely, surfaces the "two halves of one product" framing
-- TL;DR for 30s: "Your GHSA scraper changes the math. Ran it, got 100 real-world cases through, wired the bridge in apiary_train/scraped_case_adapter.py. We're now training on real data anchored to your CWE-classified advisories. Pitch is two halves of one product, not apiary vs ModuleWarden."
+- File at `apiary/pitch/whatsapp-andreas-consolidation.md`
+- Marker-clean
+- ~700 words
+- Tone: acknowledges OOM, surfaces what survived, asks for safer corpus-expansion decision
+- TL;DR: "OOM survived, 2305 GHSA + 89 version-pair extractions on disk, datadog/OSSF need to be done in smaller batches to avoid re-OOM. 6 decisions still your call."
