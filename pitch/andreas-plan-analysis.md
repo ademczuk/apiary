@@ -35,7 +35,7 @@ Source: Andrew relayed a verbal braindump from Andreas while Andreas was driving
 
 Minimum viable: A vs B (does fine-tuning help on this task?). Stronger: A/B/C or A/B/D as a third arm (is the agentic harness worth its latency + cost?). All four cells = the strongest research story.
 
-This matrix is the differentiator at UNIQA. Underwriters ask "how much do I trust this thing?" — a model that classifies correctly without tools is cheap and durable; a model that needs tools to be right is operationally heavier but might catch novel cases.
+This matrix is the differentiator at UNIQA. Underwriters ask "how much do I trust this thing?" - a model that classifies correctly without tools is cheap and durable; a model that needs tools to be right is operationally heavier but might catch novel cases.
 
 ## What apiary should cherrypick INTO ModuleWarden
 
