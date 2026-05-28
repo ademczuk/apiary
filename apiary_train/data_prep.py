@@ -423,6 +423,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to Andreas's normalized SFT data (file or directory)",
     )
+    parser.add_argument(
+        "--ossf-data",
+        type=Path,
+        help=(
+            "Path to OSSF malicious-packages scraped-case.v1 JSONL "
+            "(emit with `python -m apiary_train.ossv_adapter`). Folded "
+            "into the SFT corpus alongside figshare, synthetic, Andreas, "
+            "and GHSA sources."
+        ),
+    )
     parser.add_argument("--output", required=True, type=Path, help="Output JSONL path")
     parser.add_argument("--max-len", type=int, default=8192, help="Target context window in tokens")
     parser.add_argument("--shuffle", action="store_true", default=True)
@@ -498,6 +508,77 @@ def _append_andreas_to_output(
     }
 
 
+def _append_ossf_to_output(
+    ossf_path: Path,
+    train_out: Path,
+    test_out: Path,
+    split_test_frac: float,
+    seed: int,
+) -> dict[str, int]:
+    """Normalize OSSF scraped-case.v1 JSONL into SFT chat format and append.
+
+    The OSSF fetch pipeline (``scripts/fetch_ossf_malicious_packages.py``
+    then ``python -m apiary_train.ossv_adapter``) produces records in the
+    same scraped-case.v1 shape as Andreas's GHSA scraper. We route each
+    record through ``scraped_case_adapter.case_to_sft`` so OSSF cases
+    train on the same chat-message format as GHSA cases.
+    """
+    import random
+
+    from apiary_train.scraped_case_adapter import case_to_sft
+
+    if not ossf_path.is_file():
+        logger.warning("ossf data not found at %s; skipping", ossf_path)
+        return {"ossf_train": 0, "ossf_test": 0, "ossf_skipped": 0}
+
+    cases: list[dict] = []
+    skipped = 0
+    with ossf_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                cases.append(json.loads(line))
+            except json.JSONDecodeError:
+                skipped += 1
+
+    rng = random.Random(seed)
+    rng.shuffle(cases)
+    n_test = max(1, int(len(cases) * split_test_frac)) if cases else 0
+    test_cases = cases[:n_test]
+    train_cases = cases[n_test:]
+
+    def _emit(path: Path, bucket: list[dict], split: str) -> int:
+        if not bucket:
+            return 0
+        written = 0
+        with path.open("a", encoding="utf-8") as fh:
+            for case in bucket:
+                try:
+                    sft = case_to_sft(case, split=split)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("skip ossf case %s: %s", case.get("case_id"), exc)
+                    continue
+                fh.write(json.dumps(sft, ensure_ascii=False) + "\n")
+                written += 1
+        return written
+
+    n_train_written = _emit(train_out, train_cases, "train")
+    n_test_written = _emit(test_out, test_cases, "test")
+    logger.info(
+        "ossf: wrote %d train + %d test (skipped %d malformed lines)",
+        n_train_written,
+        n_test_written,
+        skipped,
+    )
+    return {
+        "ossf_train": n_train_written,
+        "ossf_test": n_test_written,
+        "ossf_skipped": skipped,
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     logging.basicConfig(
@@ -509,10 +590,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         records.extend(iter_figshare_packages(args.figshare_archive, args.max_figshare))
     if args.synthetic_dir:
         records.extend(iter_synthetic_packages(args.synthetic_dir, args.max_synthetic))
-    if not records and not args.andreas_data:
+    if not records and not args.andreas_data and not args.ossf_data:
         logger.error(
             "no records produced; pass --figshare-archive, --synthetic-dir, "
-            "or --andreas-data"
+            "--andreas-data, or --ossf-data"
         )
         return 1
     if records:
@@ -556,6 +637,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         stats["train_count"] = stats.get("train_count", 0) + a_stats["andreas_train"]
         stats["test_count"] = stats.get("test_count", 0) + a_stats["andreas_test"]
         stats["by_source"]["andreas"] = a_stats["andreas_train"] + a_stats["andreas_test"]
+    if args.ossf_data:
+        train_out = Path(stats["train_path"])
+        test_out = Path(stats["test_path"])
+        o_stats = _append_ossf_to_output(
+            args.ossf_data,
+            train_out,
+            test_out,
+            args.split_test_frac,
+            args.seed,
+        )
+        stats.update(o_stats)
+        stats["train_count"] = stats.get("train_count", 0) + o_stats["ossf_train"]
+        stats["test_count"] = stats.get("test_count", 0) + o_stats["ossf_test"]
+        stats["by_source"]["ossf"] = o_stats["ossf_train"] + o_stats["ossf_test"]
     print(json.dumps({k: v for k, v in stats.items() if k != "token_lengths"}, indent=2))
     return 0
 
