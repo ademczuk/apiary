@@ -1,6 +1,7 @@
 # Control Evidence Memo
 **Control ID:** APIARY-lodash-4.17.21
 **Package:** lodash@4.17.21
+**Ecosystem:** npm
 **Decision:** ALLOW
 **Threat class:** A - Compromised-Maintainer Version Bump (primary apiary focus)
 **Evaluated:** <TIMESTAMP>

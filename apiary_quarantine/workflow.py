@@ -261,10 +261,12 @@ def _plain_text_memo(context: dict[str, Any]) -> str:
     threat_class_description = context.get(
         "threat_class_description", "Compromised-Maintainer Version Bump"
     )
+    ecosystem = context.get("ecosystem", "npm")
     return (
         "# Control Evidence Memo\n"
         f"**Control ID:** {context.get('control_id', '')}\n"
         f"**Package:** {context.get('package', '')}@{context.get('version', '')}\n"
+        f"**Ecosystem:** {ecosystem}\n"
         f"**Decision:** {str(context.get('decision', '')).upper()}\n"
         f"**Threat class:** {threat_class} - {threat_class_description}\n"
         f"**Evaluated:** {context.get('timestamp', '')}\n"
@@ -322,6 +324,7 @@ def build_memo_context(
     control_id: str | None = None,
     approver_role: str = "Security Engineering",
     threat_class: str = "A",
+    ecosystem: str = "npm",
 ) -> dict[str, Any]:
     """Assemble the template context dict from raw policy outputs.
 
@@ -376,6 +379,7 @@ def build_memo_context(
         "incident_class": incident_class,
         "threat_class": threat_class,
         "threat_class_description": threat_class_description,
+        "ecosystem": ecosystem,
     }
 
 

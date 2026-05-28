@@ -1,6 +1,7 @@
 # Control Evidence Memo
 **Control ID:** APIARY-postmark-mcp-1.0.16
 **Package:** postmark-mcp@1.0.16
+**Ecosystem:** npm
 **Decision:** BLOCK
 **Threat class:** A - Compromised-Maintainer Version Bump (primary apiary focus)
 **Evaluated:** <TIMESTAMP>

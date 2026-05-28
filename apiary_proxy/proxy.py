@@ -51,6 +51,15 @@ from fastapi.responses import JSONResponse, Response
 
 from apiary_policy import PolicyDecision, decide_policy, load_environment_policy
 from apiary_proxy.cache_lru import LRUCacheEvictor
+from apiary_proxy.composer_registry import ComposerRegistry, DEFAULT_COMPOSER_UPSTREAM
+from apiary_proxy.npm_registry import NpmRegistry
+from apiary_proxy.pypi_registry import PyPIRegistry, DEFAULT_PYPI_UPSTREAM
+from apiary_proxy.registry import (
+    PackageNotFoundError,
+    Registry,
+    UpstreamError,
+    metadata_to_npm_shape,
+)
 from apiary_quarantine import load_quarantine_db
 
 logger = logging.getLogger("apiary.proxy")
@@ -76,6 +85,12 @@ class ProxyConfig:
     source_cache_dir: Path = Path("data/source-cache")
     cache_max_bytes: int = 10 * 1024 * 1024 * 1024
     cache_sweep_seconds: float = 300.0
+    # ecosystem selects which Registry the proxy mounts at startup. The
+    # legacy npm routes stay registered for backwards-compatible behaviour;
+    # the pypi / composer routes only fire when the matching ecosystem is
+    # selected so that a proxy started in npm mode does not accidentally
+    # serve unrelated indexes.
+    ecosystem: str = "npm"
 
     def __post_init__(self) -> None:
         self.cache_dir = Path(self.cache_dir)
@@ -93,6 +108,7 @@ class ProxyState:
     client: httpx.AsyncClient | None = None
     quarantine_db: dict[str, Any] = field(default_factory=dict)
     evictor: LRUCacheEvictor | None = None
+    registry: Registry | None = None
 
     async def aclose(self) -> None:
         if self.client is not None:
@@ -323,6 +339,15 @@ def _write_audit_sidecar(
 # ----------------------------------------------------------------------------
 
 
+def _build_registry(client: httpx.AsyncClient, ecosystem: str, upstream: str) -> Registry:
+    """Construct the Registry implementation for the selected ecosystem."""
+    if ecosystem == "pypi":
+        return PyPIRegistry(client, upstream=upstream)
+    if ecosystem == "composer":
+        return ComposerRegistry(client, upstream=upstream)
+    return NpmRegistry(client, upstream=upstream)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     state.client = httpx.AsyncClient(
@@ -334,6 +359,9 @@ async def _lifespan(app: FastAPI):
     state.config.audit_log.parent.mkdir(parents=True, exist_ok=True)
     state.config.source_cache_dir.mkdir(parents=True, exist_ok=True)
     state.reload_quarantine()
+    state.registry = _build_registry(
+        state.client, state.config.ecosystem, state.config.upstream
+    )
 
     # Start LRU evictor for the tarball cache.
     state.evictor = LRUCacheEvictor(
@@ -372,8 +400,229 @@ def healthz() -> dict[str, Any]:
         "cache_dir": str(state.config.cache_dir),
         "quarantine_loaded": bool(state.quarantine_db),
         "environment": state.config.environment,
+        "ecosystem": state.config.ecosystem,
         "cache_stats": cache_stats,
     }
+
+
+# ----------------------------------------------------------------------------
+# Cross-ecosystem helpers
+# ----------------------------------------------------------------------------
+
+
+async def _gate_with_registry(
+    package: str, version: str, req: Request, *, filename: str | None = None
+) -> Response:
+    """Run a Registry-backed package through the policy gate.
+
+    Shared by the PyPI and Composer routes. The npm routes keep their
+    legacy direct httpx wiring so the metadata cache layout, on-disk
+    audit sidecars, and dist.tarball rewriting all continue to work
+    unchanged for existing demos.
+    """
+    if state.registry is None:
+        raise HTTPException(status_code=503, detail="proxy not initialized")
+    try:
+        meta = await state.registry.get_metadata(package, version)
+        payload = await state.registry.get_tarball(package, version)
+    except PackageNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    npm_shape = metadata_to_npm_shape(meta)
+    state.reload_quarantine()
+    decision = await asyncio.to_thread(
+        decide_policy,
+        package=package,
+        version=version,
+        metadata=npm_shape,
+        tarball_bytes=payload,
+        quarantine_db=state.quarantine_db,
+        min_age_days=state.config.min_age_days,
+        environment=state.config.environment,
+        env_config_path=state.config.env_config_path,
+        source_cache_dir=state.config.source_cache_dir,
+    )
+    _write_audit_sidecar(package, version, decision)
+    _audit(
+        {
+            "event": "tarball",
+            "package": package,
+            "version": version,
+            "filename": filename or "",
+            "ecosystem": meta.ecosystem,
+            "bytes": len(payload),
+            "verdict": decision.verdict,
+            "failed_rules": decision.failed_rules,
+            "client": req.headers.get("user-agent", ""),
+        }
+    )
+
+    if decision.verdict == "block":
+        return JSONResponse(
+            status_code=451,
+            content={
+                "error": "blocked-by-apiary-policy",
+                "package": package,
+                "version": version,
+                "ecosystem": meta.ecosystem,
+                "failed_rules": decision.failed_rules,
+                "evidence": decision.evidence,
+            },
+        )
+    if decision.verdict == "quarantine":
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "quarantined",
+                "package": package,
+                "version": version,
+                "ecosystem": meta.ecosystem,
+                "failed_rules": decision.failed_rules,
+                "evidence": decision.evidence,
+            },
+        )
+    return Response(content=payload, media_type="application/octet-stream")
+
+
+# ----------------------------------------------------------------------------
+# PyPI routes
+# ----------------------------------------------------------------------------
+#
+# These routes only do anything useful when the proxy is started with
+# ``--ecosystem pypi``. They are registered unconditionally so a single
+# binary can serve any ecosystem on demand; the route handlers themselves
+# refuse traffic when the configured ecosystem does not match.
+
+
+def _require_ecosystem(expected: str) -> None:
+    if state.config.ecosystem != expected:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"proxy is in {state.config.ecosystem!r} mode; "
+                f"{expected!r} routes are not active"
+            ),
+        )
+
+
+@app.get("/simple/{package}/")
+async def pypi_simple_index(package: str, req: Request) -> Response:
+    """Emit a minimal PEP 503 simple index for one package.
+
+    The Python install index format that pip understands is HTML with one
+    anchor per dist file. We render the same view from the PyPI Registry
+    metadata so pip can resolve and download through the proxy.
+    """
+    _require_ecosystem("pypi")
+    if state.registry is None:
+        raise HTTPException(status_code=503, detail="proxy not initialized")
+    canonical = state.registry.normalize_package_name(package)
+    # PyPI's JSON API needs a specific version. The simple index lists
+    # every version, so we proxy through to the upstream simple endpoint
+    # rather than rebuild it from the JSON API per version.
+    assert state.client is not None
+    url = f"{state.registry.upstream_url()}/simple/{canonical}/"
+    try:
+        resp = await state.client.get(url, headers={"Accept": "text/html"})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"upstream error: {exc}") from exc
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"pypi package not found: {package}")
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502, detail=f"upstream {resp.status_code} for {package}"
+        )
+    _audit(
+        {
+            "event": "pypi_simple",
+            "package": package,
+            "client": req.headers.get("user-agent", ""),
+        }
+    )
+    return Response(content=resp.content, media_type="text/html")
+
+
+@app.get("/pypi/{package}/{version}/json")
+async def pypi_metadata(package: str, version: str, req: Request) -> Response:
+    """Return the PyPI JSON metadata for ``package@version``."""
+    _require_ecosystem("pypi")
+    if state.registry is None:
+        raise HTTPException(status_code=503, detail="proxy not initialized")
+    try:
+        meta = await state.registry.get_metadata(package, version)
+    except PackageNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    _audit(
+        {
+            "event": "pypi_metadata",
+            "package": package,
+            "version": version,
+            "client": req.headers.get("user-agent", ""),
+        }
+    )
+    return JSONResponse(meta.raw)
+
+
+@app.get("/pypi/dist/{package}/{version}/{filename}")
+async def pypi_dist(
+    package: str, version: str, filename: str, req: Request
+) -> Response:
+    """Serve a PyPI distribution archive through the policy gate."""
+    _require_ecosystem("pypi")
+    return await _gate_with_registry(package, version, req, filename=filename)
+
+
+# ----------------------------------------------------------------------------
+# Composer routes
+# ----------------------------------------------------------------------------
+
+
+@app.get("/p2/{vendor}/{name}.json")
+async def composer_metadata(
+    vendor: str, name: str, req: Request
+) -> Response:
+    """Mirror the Packagist v2 metadata endpoint for ``vendor/name``."""
+    _require_ecosystem("composer")
+    if state.registry is None:
+        raise HTTPException(status_code=503, detail="proxy not initialized")
+    package = f"{vendor}/{name}"
+    # Composer fetches the entire version list in one go; surface the
+    # upstream document verbatim. The policy gate fires on dist fetch.
+    assert state.client is not None
+    canonical = state.registry.normalize_package_name(package)
+    url = f"{state.registry.upstream_url()}/p2/{canonical}.json"
+    try:
+        resp = await state.client.get(url, headers={"Accept": "application/json"})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"upstream error: {exc}") from exc
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"composer package not found: {package}")
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502, detail=f"upstream {resp.status_code} for {package}"
+        )
+    _audit(
+        {
+            "event": "composer_metadata",
+            "package": package,
+            "client": req.headers.get("user-agent", ""),
+        }
+    )
+    return Response(content=resp.content, media_type="application/json")
+
+
+@app.get("/dist/{vendor}/{name}/{version}.zip")
+async def composer_dist(
+    vendor: str, name: str, version: str, req: Request
+) -> Response:
+    """Serve a Composer dist archive through the policy gate."""
+    _require_ecosystem("composer")
+    package = f"{vendor}/{name}"
+    return await _gate_with_registry(package, version, req, filename=f"{version}.zip")
 
 
 @app.get("/-/ping")
@@ -488,6 +737,7 @@ async def _serve_tarball(
 
 @app.get("/{package}")
 async def metadata_unscoped(package: str, req: Request) -> Response:
+    _require_ecosystem("npm")
     if package.startswith("@"):
         raise HTTPException(status_code=400, detail="use /@scope/name for scoped packages")
     if package.startswith("-"):
@@ -497,6 +747,7 @@ async def metadata_unscoped(package: str, req: Request) -> Response:
 
 @app.get("/{package}/-/{filename}")
 async def tarball_unscoped(package: str, filename: str, req: Request) -> Response:
+    _require_ecosystem("npm")
     if not filename.endswith(".tgz"):
         raise HTTPException(status_code=400, detail="only .tgz tarballs are served")
     return await _serve_tarball(package, filename, req)
@@ -504,6 +755,7 @@ async def tarball_unscoped(package: str, filename: str, req: Request) -> Respons
 
 @app.get("/@{scope}/{name}")
 async def metadata_scoped(scope: str, name: str, req: Request) -> Response:
+    _require_ecosystem("npm")
     package = f"@{scope}/{name}"
     return await _serve_metadata(package, req)
 
@@ -512,6 +764,7 @@ async def metadata_scoped(scope: str, name: str, req: Request) -> Response:
 async def tarball_scoped(
     scope: str, name: str, filename: str, req: Request
 ) -> Response:
+    _require_ecosystem("npm")
     if not filename.endswith(".tgz"):
         raise HTTPException(status_code=400, detail="only .tgz tarballs are served")
     package = f"@{scope}/{name}"
@@ -545,6 +798,14 @@ def audit_tail(limit: int = 50) -> list[dict[str, Any]]:
 # ----------------------------------------------------------------------------
 
 
+def _default_upstream_for(ecosystem: str) -> str:
+    if ecosystem == "pypi":
+        return DEFAULT_PYPI_UPSTREAM
+    if ecosystem == "composer":
+        return DEFAULT_COMPOSER_UPSTREAM
+    return DEFAULT_UPSTREAM
+
+
 def _configure(args: argparse.Namespace) -> None:
     env_name = args.environment or os.environ.get("APIARY_ENVIRONMENT", "preprod")
     env_config_path: Path | None = None
@@ -562,8 +823,16 @@ def _configure(args: argparse.Namespace) -> None:
             env_name, env_config_path
         ).min_release_age_days
 
+    ecosystem = args.ecosystem or "npm"
+    # Use the ecosystem-specific default upstream when the caller did not
+    # override it. This keeps ``--ecosystem pypi`` working without forcing
+    # the operator to also pass ``--upstream``.
+    upstream = args.upstream
+    if upstream == DEFAULT_UPSTREAM and ecosystem != "npm":
+        upstream = _default_upstream_for(ecosystem)
+
     state.config = ProxyConfig(
-        upstream=args.upstream,
+        upstream=upstream,
         cache_dir=args.cache_dir,
         audit_log=args.audit_log,
         quarantine_dir=args.quarantine_dir,
@@ -575,6 +844,7 @@ def _configure(args: argparse.Namespace) -> None:
         source_cache_dir=args.source_cache_dir,
         cache_max_bytes=args.cache_max_bytes,
         cache_sweep_seconds=args.cache_sweep_seconds,
+        ecosystem=ecosystem,
     )
 
 
@@ -628,6 +898,15 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=300.0,
         help="LRU eviction sweep interval (seconds)",
+    )
+    parser.add_argument(
+        "--ecosystem",
+        choices=("npm", "pypi", "composer"),
+        default="npm",
+        help=(
+            "Which package ecosystem this proxy instance serves. The default "
+            "upstream URL is selected automatically based on this choice."
+        ),
     )
     parser.add_argument("--log-level", default="info")
     args = parser.parse_args(argv)

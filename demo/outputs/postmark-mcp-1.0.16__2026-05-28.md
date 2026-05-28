@@ -3,7 +3,7 @@
 **Package:** postmark-mcp@1.0.16
 **Decision:** BLOCK
 **Threat class:** A - Compromised-Maintainer Version Bump (primary apiary focus)
-**Evaluated:** 2026-05-28T08:09:41.642367+00:00
+**Evaluated:** 2026-05-28T08:10:38.817599+00:00
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
 
@@ -49,7 +49,7 @@ Not performed.
 
 ## Evidence Hashes
 - Package tarball SHA-512: `f59c4cd308ca26abd904ba243b028256c275cb433074cbffe0fabf66a0137c8bee873bea65f1530da686390e698a8b7574f2c8baa27a3a0cfb074bf79f3ad744`
-- Metadata snapshot SHA-256: `e9239232a4ca841689204e54102e7517156a1a73e63cbffc2f6eaed2a01f0024`
+- Metadata snapshot SHA-256: `ef215a1766bd7495f3d3ead479808320410c06a539c64a3d9d77d50ee80c5a03`
 
 ## Exception Path
 If this decision is incorrect, file an exception via:

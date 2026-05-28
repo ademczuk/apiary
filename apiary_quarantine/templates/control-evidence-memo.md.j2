@@ -1,6 +1,7 @@
 # Control Evidence Memo
 **Control ID:** {{ control_id }}
 **Package:** {{ package }}@{{ version }}
+**Ecosystem:** {{ ecosystem | default("npm") }}
 **Decision:** {{ decision | upper }}
 **Threat class:** {{ threat_class | default("A") }} - {{ threat_class_description | default("Compromised-Maintainer Version Bump") }}
 **Evaluated:** {{ timestamp }}

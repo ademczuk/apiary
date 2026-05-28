@@ -49,6 +49,31 @@ LIFECYCLE_HOOKS: tuple[str, ...] = (
     "prepublishOnly",
 )
 
+# Composer lifecycle hooks. ``post-autoload-dump`` runs after every
+# ``composer install`` / ``composer update`` so it is the high-value target
+# for an attacker; the other names mirror npm semantics.
+COMPOSER_LIFECYCLE_HOOKS: tuple[str, ...] = (
+    "pre-install-cmd",
+    "post-install-cmd",
+    "pre-update-cmd",
+    "post-update-cmd",
+    "post-autoload-dump",
+    "pre-autoload-dump",
+    "pre-package-install",
+    "post-package-install",
+    "pre-package-update",
+    "post-package-update",
+)
+
+# PyPI install hooks are synthesized in the registry adapter. The presence
+# of ``setup_py`` means a non-wheel distribution carries arbitrary code.
+PYPI_LIFECYCLE_HOOKS: tuple[str, ...] = (
+    "setup_py",
+    "install_requires_url",
+    "custom_install_cmd",
+    "post_install_hook",
+)
+
 # Single-token commands we will tolerate inside lifecycle scripts. Anything
 # else (shell metachars, multi-arg invocations, eval-like primitives) is a
 # block.
@@ -62,6 +87,23 @@ TRIVIAL_LIFECYCLE_ALLOWLIST: frozenset[str] = frozenset(
         "exit",
     }
 )
+
+# Composer allow-list. ``@php`` prefix invocations (e.g. ``@php artisan
+# package:discover``) and a handful of bundled binaries are tolerated.
+COMPOSER_TRIVIAL_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "@php",
+        "@composer",
+        "echo",
+        "true",
+        "exit",
+    }
+)
+
+# PyPI allow-list is intentionally empty: any setup.py-equivalent hook in
+# a PyPI sdist is by definition arbitrary Python that runs at install
+# time, and the policy engine treats every such hook as block-worthy.
+PYPI_TRIVIAL_ALLOWLIST: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -108,7 +150,10 @@ def check_release_age(
     return True, f"released {age_days:.1f}d ago"
 
 
-def _is_trivial_script(command: str) -> bool:
+def _is_trivial_script(
+    command: str,
+    allowlist: frozenset[str] = TRIVIAL_LIFECYCLE_ALLOWLIST,
+) -> bool:
     """Return True when ``command`` is a single-token, allowlisted invocation."""
     if not command or not command.strip():
         return True
@@ -122,21 +167,42 @@ def _is_trivial_script(command: str) -> bool:
         return True
     head = parts[0]
     # Allow forms like ``node-gyp rebuild`` (two-token, allowlisted head).
-    if head in TRIVIAL_LIFECYCLE_ALLOWLIST and len(parts) <= 3:
+    if head in allowlist and len(parts) <= 3:
         return True
     return False
 
 
-def check_install_scripts(package_json: dict[str, Any]) -> tuple[bool, str]:
-    """Reject packages whose lifecycle scripts are non-trivial."""
+def _ecosystem_lifecycle_config(
+    ecosystem: str,
+) -> tuple[tuple[str, ...], frozenset[str]]:
+    """Return (lifecycle_hook_list, trivial_allowlist) for an ecosystem."""
+    if ecosystem == "pypi":
+        return PYPI_LIFECYCLE_HOOKS, PYPI_TRIVIAL_ALLOWLIST
+    if ecosystem == "composer":
+        return COMPOSER_LIFECYCLE_HOOKS, COMPOSER_TRIVIAL_ALLOWLIST
+    return LIFECYCLE_HOOKS, TRIVIAL_LIFECYCLE_ALLOWLIST
+
+
+def check_install_scripts(
+    package_json: dict[str, Any], ecosystem: str = "npm"
+) -> tuple[bool, str]:
+    """Reject packages whose lifecycle scripts are non-trivial.
+
+    ``ecosystem`` selects the hook list and the trivial-command allowlist.
+    The rule body is otherwise identical across npm / pypi / composer:
+    walk every hook, run the trivial-script heuristic against each
+    command, and surface a block when any hook trips.
+    """
     scripts = package_json.get("scripts") or {}
     if not isinstance(scripts, dict):
         return False, "scripts field is not an object"
 
+    hooks, allowlist = _ecosystem_lifecycle_config(ecosystem)
+
     offenders: list[str] = []
-    for hook in LIFECYCLE_HOOKS:
+    for hook in hooks:
         cmd = scripts.get(hook)
-        if cmd and not _is_trivial_script(str(cmd)):
+        if cmd and not _is_trivial_script(str(cmd), allowlist=allowlist):
             offenders.append(f"{hook}={cmd!r}")
     if offenders:
         return False, "non-trivial lifecycle scripts: " + "; ".join(offenders)
@@ -275,11 +341,15 @@ def decide_policy(
     effective_min_age = min_age_days if min_age_days is not None else policy.min_release_age_days
 
     package_json = _extract_package_json(metadata, version)
+    # ``_ecosystem`` is stamped into the npm-shape projection by
+    # ``apiary_proxy.registry.metadata_to_npm_shape``. Default to npm so
+    # existing call sites keep working unchanged.
+    ecosystem = str(metadata.get("_ecosystem", "npm"))
 
     rules: list[tuple[str, tuple[bool, str] | None]] = [
         ("known_quarantine", check_known_quarantine(package, version, quarantine_db)),
         ("release_age", check_release_age(metadata, version, effective_min_age)),
-        ("install_scripts", check_install_scripts(package_json)),
+        ("install_scripts", check_install_scripts(package_json, ecosystem=ecosystem)),
         ("checksum", check_checksum(metadata, version, tarball_bytes)),
         ("source_match", check_source_match(metadata, version, tarball_bytes, source_cache_dir)),
     ]

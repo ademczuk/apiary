@@ -19,13 +19,19 @@ import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
-SupportedAlgo = Literal["sha512", "sha384", "sha256"]
+SupportedAlgo = Literal["sha512", "sha384", "sha256", "sha1"]
 
 _ALGO_TO_HASHLIB = {
     "sha512": hashlib.sha512,
     "sha384": hashlib.sha384,
     "sha256": hashlib.sha256,
+    "sha1": hashlib.sha1,
 }
+
+# Algorithms that ship hex-encoded digests in their native ecosystems
+# (Composer uses sha1 hex). The integrity string uses the ``algo-hex:<hex>``
+# form so the parser can branch without false positives against base64.
+_HEX_ENCODED_ALGOS: frozenset[str] = frozenset({"sha1"})
 
 
 @dataclass(frozen=True)
@@ -60,6 +66,12 @@ def parse_integrity(integrity_str: str) -> tuple[SupportedAlgo, str]:
             continue
         algo, _, digest = alt.partition("-")
         algo_lower = algo.strip().lower()
+        # Composer-style hex digests use the ``algo-hex:<hex>`` envelope.
+        if digest.startswith("hex:"):
+            hex_part = digest[len("hex:"):].strip()
+            if algo_lower in _ALGO_TO_HASHLIB and hex_part:
+                parsed.append((algo_lower, "hex:" + hex_part))
+            continue
         if algo_lower in _ALGO_TO_HASHLIB and digest:
             parsed.append((algo_lower, digest.strip()))
 
@@ -68,8 +80,10 @@ def parse_integrity(integrity_str: str) -> tuple[SupportedAlgo, str]:
             f"no supported algorithm in integrity string: {integrity_str!r}"
         )
 
-    # Strength ordering: prefer sha512, then sha384, then sha256.
-    ranking = {"sha512": 3, "sha384": 2, "sha256": 1}
+    # Strength ordering: prefer sha512, then sha384, sha256, sha1. sha1
+    # only appears for Composer dist archives where the upstream itself
+    # publishes nothing stronger.
+    ranking = {"sha512": 4, "sha384": 3, "sha256": 2, "sha1": 1}
     parsed.sort(key=lambda item: ranking[item[0]], reverse=True)
     return parsed[0]
 
@@ -107,6 +121,19 @@ def verify_integrity(integrity_str: str, tarball_bytes: bytes) -> ChecksumResult
             actual_b64="",
             matches=False,
             error="tarball_bytes is not bytes-like",
+        )
+
+    # Hex-flagged digests (Composer sha1) are compared in hex form so the
+    # tarball never round-trips through base64 unnecessarily.
+    if expected_b64.startswith("hex:"):
+        expected_hex = expected_b64[len("hex:"):].strip().lower()
+        actual_hex = _ALGO_TO_HASHLIB[algo](bytes(tarball_bytes)).hexdigest().lower()
+        return ChecksumResult(
+            algo=algo,
+            expected_b64=expected_hex,
+            actual_b64=actual_hex,
+            matches=expected_hex == actual_hex,
+            error=None,
         )
 
     actual_b64 = compute_digest(bytes(tarball_bytes), algo)
