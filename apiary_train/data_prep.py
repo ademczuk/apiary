@@ -418,6 +418,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Apiary SFT data preparation")
     parser.add_argument("--figshare-archive", type=Path, help="Path to figshare ZIP")
     parser.add_argument("--synthetic-dir", type=Path, help="Synthetic output dir with manifest.jsonl")
+    parser.add_argument(
+        "--andreas-data",
+        type=Path,
+        help="Path to Andreas's normalized SFT data (file or directory)",
+    )
     parser.add_argument("--output", required=True, type=Path, help="Output JSONL path")
     parser.add_argument("--max-len", type=int, default=8192, help="Target context window in tokens")
     parser.add_argument("--shuffle", action="store_true", default=True)
@@ -428,6 +433,69 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split-test-frac", type=float, default=0.05)
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser
+
+
+def _append_andreas_to_output(
+    andreas_path: Path,
+    train_out: Path,
+    test_out: Path,
+    split_test_frac: float,
+    seed: int,
+) -> dict[str, int]:
+    """Normalize Andreas's data and append it to the train/test JSONL files.
+
+    The adapter handles shape detection; we then split the resulting
+    lines into train/test according to ``split_test_frac`` and append.
+    """
+    import random
+    import tempfile
+
+    from apiary_train.andreas_data_adapter import normalize_to_sft_format
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".jsonl",
+        delete=False,
+        encoding="utf-8",
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        written, skipped = normalize_to_sft_format(andreas_path, tmp_path)
+        lines = [
+            line
+            for line in tmp_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+    rng = random.Random(seed)
+    rng.shuffle(lines)
+    n_test = max(1, int(len(lines) * split_test_frac)) if lines else 0
+    test_lines = lines[:n_test]
+    train_lines = lines[n_test:]
+    if train_lines:
+        with train_out.open("a", encoding="utf-8") as fh:
+            for ln in train_lines:
+                fh.write(ln + "\n")
+    if test_lines:
+        with test_out.open("a", encoding="utf-8") as fh:
+            for ln in test_lines:
+                fh.write(ln + "\n")
+    logger.info(
+        "andreas: wrote %d train + %d test (skipped %d)",
+        len(train_lines),
+        len(test_lines),
+        skipped,
+    )
+    return {
+        "andreas_train": len(train_lines),
+        "andreas_test": len(test_lines),
+        "andreas_skipped": skipped,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -441,17 +509,53 @@ def main(argv: Sequence[str] | None = None) -> int:
         records.extend(iter_figshare_packages(args.figshare_archive, args.max_figshare))
     if args.synthetic_dir:
         records.extend(iter_synthetic_packages(args.synthetic_dir, args.max_synthetic))
-    if not records:
-        logger.error("no records produced; pass --figshare-archive and/or --synthetic-dir")
+    if not records and not args.andreas_data:
+        logger.error(
+            "no records produced; pass --figshare-archive, --synthetic-dir, "
+            "or --andreas-data"
+        )
         return 1
-    stats = prepare_sft_dataset(
-        records,
-        out_path=args.output,
-        max_len_tokens=args.max_len,
-        shuffle=args.shuffle,
-        seed=args.seed,
-        split_test_frac=args.split_test_frac,
-    )
+    if records:
+        stats = prepare_sft_dataset(
+            records,
+            out_path=args.output,
+            max_len_tokens=args.max_len,
+            shuffle=args.shuffle,
+            seed=args.seed,
+            split_test_frac=args.split_test_frac,
+        )
+    else:
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("", encoding="utf-8")
+        test_path = (
+            out_path.with_suffix(".test.jsonl")
+            if out_path.suffix
+            else out_path.parent / (out_path.name + ".test.jsonl")
+        )
+        test_path.write_text("", encoding="utf-8")
+        stats = {
+            "train_count": 0,
+            "test_count": 0,
+            "by_label": {},
+            "by_source": {},
+            "train_path": str(out_path),
+            "test_path": str(test_path),
+        }
+    if args.andreas_data:
+        train_out = Path(stats["train_path"])
+        test_out = Path(stats["test_path"])
+        a_stats = _append_andreas_to_output(
+            args.andreas_data,
+            train_out,
+            test_out,
+            args.split_test_frac,
+            args.seed,
+        )
+        stats.update(a_stats)
+        stats["train_count"] = stats.get("train_count", 0) + a_stats["andreas_train"]
+        stats["test_count"] = stats.get("test_count", 0) + a_stats["andreas_test"]
+        stats["by_source"]["andreas"] = a_stats["andreas_train"] + a_stats["andreas_test"]
     print(json.dumps({k: v for k, v in stats.items() if k != "token_lengths"}, indent=2))
     return 0
 

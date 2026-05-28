@@ -171,6 +171,18 @@ python -m apiary_train.data_prep \
     --output data/sft/v1.jsonl \
     --max-len 8192 --shuffle --seed 42
 
+# 1a. Optional: fold in Andreas's finetune corpus once we have access.
+# Drive folder: 1GaNVt0eP9k-BW_E0fuIdqd5gsvY2a1Mz
+pip install gdown
+python scripts/fetch_andreas_data.py \
+    --drive-folder-id 1GaNVt0eP9k-BW_E0fuIdqd5gsvY2a1Mz \
+    --output data/raw/andreas-finetune/
+python -m apiary_train.data_prep \
+    --figshare-archive data/raw/figshare/63179326_NPMStudy.zip \
+    --synthetic-dir data/synthetic/v1 \
+    --andreas-data data/raw/andreas-finetune/ \
+    --output data/sft/v1.jsonl
+
 # 2. Distributed train (8 nodes x 8 H100)
 BASE_MODEL=THUDM/glm-5.1-32b-base sbatch slurm/abliterate_then_sft.slurm
 
