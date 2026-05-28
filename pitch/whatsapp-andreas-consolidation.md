@@ -1,75 +1,87 @@
-# WhatsApp message to Andreas - 2026-05-28 (consolidation read)
+# WhatsApp message to Andreas - 2026-05-28 (post agent-readiness sprint)
 
-Copy-paste below the line. Uses WhatsApp markdown.
-
-This message acknowledges Andreas's ModuleWarden work honestly. Don't soften it. Don't oversell apiary.
+Copy-paste below the line. WhatsApp markdown.
 
 ---
 
-*apiary vs ModuleWarden - the honest read*
+*Apiary v3 + agent-readability prep + multi-ecosystem*
 
-I had codex do an adversarial review of both repos this morning. The verdict is the right one I think, and worth being straight with you about.
+Big round of work since the last update. Wrote everything in apiary in a form your Claude Code CLI agent can read and reason from. The agent's canonical entry point is `FOR_ANDREAS_AGENT.md` at the repo root. Point your CC at the repo and tell it to read that first.
 
-*For Sunday demo: we ship apiary.* Not because it's the better product - it's not - but because it's the only one with a controlled live demo runnable today. The postmark-mcp@1.0.16 incident replay works end-to-end, blocks the package with rule-by-rule reasoning, generates a Control Evidence Memo, smoke-tests PASS on three golden incidents. The H100 abliteration + SFT LoRA training stack is wired and pre-flightable on Qwen 1.5B in 30 min before we burn H100 hours.
+*What landed in apiary (commits e36f563 + c904668)*
 
-*For production: your ModuleWarden architecture is the right one.* You have:
-- Class A/B/C threat classification I should have had from day one (Andrews mistake, fixing now)
-- Verdict semantics with proper allow/block/quarantine/override/re-audit vocabulary
-- Prompt-secrecy trust boundaries explicitly documented
-- Typed AuditContext, Decision, PackageIdentity, JobPayloads
-- Postgres + Prisma + pg-boss for decision provenance and durable jobs
-- Per-audit Docker containers with no shared mutable state
-- Verdaccio as the backing store, ModuleWarden as the gate (the right separation)
+5 new agent-readable docs:
+- `FOR_ANDREAS_AGENT.md` (553 lines): canonical entry, sibling-relationship framing, Sunday decision
+- `CLAUDE.md`: lean operating context (Claude Code auto-loads this)
+- `AGENT_PRIMER.md`: repo map, common tasks, smoke commands, cross-repo nav
+- `docs/CAPABILITY_MATRIX.md`: 12-category side-by-side with file:line citations in BOTH repos
+- `docs/SUBMIT_APIARY.md`: per-capability evidence + MW time-to-parity (~80-120h)
+- `docs/ENHANCE_MODULEWARDEN.md`: concrete TS port plans + hour estimates (~55-78h)
 
-apiary punted on all of those for hackathon time pressure. JSONL audit log not Postgres. Inline asyncio not per-job Docker. Direct upstream proxy not Verdaccio promote-only. Allow/block/quarantine but no Override + Re-audit campaign semantics yet.
+Multi-ecosystem support (cross-stack defense story for the pitch):
+- `apiary_proxy/registry.py` - Registry abstraction
+- `apiary_proxy/npm_registry.py`, `pypi_registry.py`, `composer_registry.py`
+- 4 new attack patterns: pypi_setup_py_exfil, pypi_dependency_confusion, composer_post_install_cmd, composer_typosquat (catalog now 26 patterns)
+- `demo/incidents/ctx-0.2.2/` - PyPI May 2022 incident reconstruction (sanitized)
+- `demo/incidents/larvel-framework/` - Composer typosquat of laravel/framework
 
-*Pre-Sunday consolidation diff I'm shipping right now* (so apiary speaks your vocabulary at the judges table):
-1. apiary/shared/types.py - Python dataclasses mirroring your TS Verdict, PackageIdentity, AuditContext, Decision, Override
-2. Label postmark-mcp as Threat Class A in the replay output and the audit memo
-3. Add prompt-secrecy limitations from your architecture doc into our memo template
-4. CONSOLIDATION.md - explicit doc saying apiary is the hackathon runtime, ModuleWarden is the production target, with credit to your architecture work
-5. Fix stale README claims that source-match + LRU are "deferred" - they shipped in commit 9fb21f1 (lodash live test 99% file-match in 16.8s)
+Finetune-data adapter (ready for your Drive data):
+- `scripts/fetch_andreas_data.py` - three-mode downloader (gdown/rclone/manual URL list)
+- `apiary_train/andreas_data_adapter.py` - auto-detects 4 data shapes (chat messages, prompt+completion, input/output, HF splits)
+- `apiary_train/data_prep.py` - `--andreas-data` flag wired into the SFT pipeline
+- 7/7 adapter smoke tests PASS on synthetic samples
 
-*Post-hackathon merge path I'd propose:*
-- Port the apiary policy rules and source-match logic into your TypeScript packages/api-proxy
-- Adopt your Prisma schema as the durable persistence layer
-- Move our LLM audit pipeline into your worker package + per-job Docker containers
-- Fold the apiary_train H100 abliteration + SFT stack into your audit-runner image
-- Use your Verdaccio promote-only model as the production backing store
-- Keep your verdict semantics as the canonical vocabulary
+*Drive 401 - one ask*
 
-We'd basically end up with ModuleWarden as the production system and apiary as the hackathon proof-of-concept that informed it.
+I tried `gdown --folder https://drive.google.com/drive/folders/1GaNVt0eP9k-BW_E0fuIdqd5gsvY2a1Mz` and got HTTP 401. Folder permissions need to be "Anyone with the link" (currently "Restricted"). Alternatives if you do not want it public:
+1. Share with `joey.lucia@gmail.com` directly (the auth I am using here)
+2. Re-upload to a public folder
+3. Paste the data into a gist / dump it in apiary/data/raw/andreas-finetune/ via your own workstation
 
-*One thing I want to know from you before sbatch Saturday:*
+Once we have access, `python scripts/fetch_andreas_data.py --drive-folder-id 1GaNVt0eP9k-BW_E0fuIdqd5gsvY2a1Mz --output data/raw/andreas-finetune/` pulls everything, the adapter auto-shapes it, and `data_prep.py --andreas-data` folds it into the SFT corpus for the H100 run.
 
-Codex flagged that your proxy E2E test accepts 404/502/503 as valid responses for a tarball path (`packages/api-proxy/src/__tests__/proxy-e2e.test.ts:177-186`). That's a "the proxy is allowed to fail" test, which is fine for scaffold-stage but not for an underwriter audience. Want me to write a tighter assertion suite for that path before Sunday, or are you handling it via your TASK-1.4 Verdaccio promotion work?
+*Honest recalibration on your repo*
 
-*One genuine architectural critique you can throw back at me:*
+I underestimated your shipped work on apetersson/ModuleWarden in the earlier briefs. After pulling main (was on a stale feat/landing-site checkout), the real picture: ~9,150 LOC TypeScript across 96 commits, TASK-1.10 verdict policy with admin override SHIPPED, decision lineage Prisma repos SHIPPED, container-runner.ts (315 LOC) for per-job Docker isolation SHIPPED, pg-boss queue (473 LOC) + 1397 LOC of job tests SHIPPED, lockfile-import service SHIPPED. That is not scaffolding; that is the production architecture. apiary's earlier briefs that called it "scaffolds" were wrong; the new docs correct it.
 
-apiary's decision durability is in-memory + JSONL sidecars (apiary_proxy/proxy.py:121-128). Your Prisma schema for decisions/evidence/lineage (packages/prisma-client/prisma/schema.prisma:304-347 on origin/main) is the right model. If you wanted to spend Saturday morning porting the JSONL append in `_record_decision` to write through a Prisma client into a sidecar Postgres on the demo machine, that would close the most embarrassing apiary gap before judges look at the code. Your call - I think the JSONL is fine for the 60-second demo but it's the one thing a sharp judge could grep and pick apart.
+*The two paths your agent should weigh*
 
-*Numbers I'm working with*
+`docs/SUBMIT_APIARY.md` makes the case for shipping apiary Sunday (working demo + insurance pitch + H100 stack; MW would need 80-120h to reach apiary's Sunday-readiness across the 15 demo-required capabilities).
 
-- apiary: 11,400 Python LOC, 114 files, 12 commits to main, all smoke tests PASS
-- ModuleWarden: TypeScript monorepo, 8 packages scaffold, TASK-1.5 + 1.6 just shipped (lockfile import + Docker audit runner)
-- Live landing page: https://ademczuk.github.io/modulewarden-website/
-- Honest podium odds: ~45-50% with apiary as submitted; ~55-60% if UNIQA outreach lands one anonymized claim
+`docs/ENHANCE_MODULEWARDEN.md` makes the case for consolidating INTO ModuleWarden (concrete TS port plans with hour estimates; total ~55-78h for everything, P0-only ~18-26h). Pre-Sunday option: the 5-minute `EXTERNAL_DEMO.md` cross-reference in your repo pointing to apiary's demo URL, no code port needed.
 
-*Decisions still in your court*
-1. Accept the apiary collaborator invitation (github.com/ademczuk/apiary/invitations) - write access already granted
-2. Pick the slurm default model (A=Llama 3.1 8B, B=GLM 5.1 32B per your original ask, C=defer to Friday)
-3. Kick off the 3.4GB figshare full archive download Friday night so SFT has real training material
-4. Send Dwarfstar endpoint + model name for the inference path
+*Honest split of who wins what*
+
+apiary owns: working demo + Control Evidence Memo + insurance pitch + H100 abliteration+SFT + 26-pattern attack catalog + multi-ecosystem (npm + PyPI + Composer) + source-match + per-env policy + LRU cache + andreas-data adapter.
+
+MW owns: Prisma decision lineage + per-job Docker isolation + pg-boss durable queue + admin override semantics + re-audit campaigns + lockfile + subscription import + approved-only metadata + Verdaccio promote-only + Class A/B/C threat model formalization (origin).
+
+Sunday: ship apiary. Post-event: port apiary into MW with you as the canonical architecture host.
+
+*What I still need from you*
+
+1. Drive folder permissions fix OR alternative data delivery path
+2. Accept the apiary collaborator invitation (https://github.com/ademczuk/apiary/invitations) - write access already granted
+3. Model default for slurm (A=Llama 3.1 8B per Pantheon, B=GLM 5.1 32B per your original ask, C=defer to Friday)
+4. Dwarfstar endpoint URL + model name for the inference path
 5. UNIQA hackathon contact - any reply yet?
-6. Want me to port apiary JSONL audit through Prisma onto Postgres Saturday morning? (~3h, your call)
+6. Your read on the SUBMIT vs ENHANCE decision (your CC agent can advise; I lean SUBMIT-apiary based on Sunday timeline math)
 
-Repo state is shippable. The consolidation diff is going in now. WhatsApp me Discord if you want to talk through any of this before sleep.
+*Updated honest win probability*
+
+- With current apiary state + multi-ecosystem: ~50-55% podium
+- + UNIQA outreach landing one anonymized claim: ~58-62% podium
+- + Sunday demo executes clean + we frame the abliteration in governance language not "uncensored model": ~62-68% podium
+
+Repo: https://github.com/ademczuk/apiary (commit c904668) - 17 commits on main, all smoke tests PASS, marker scans clean.
+Live site: https://ademczuk.github.io/modulewarden-website/.
 
 ---
 
 ## Notes for me (not for Andreas)
 
-- File at `apiary/pitch/whatsapp-andreas-consolidation.md`, marker-clean
-- ~900 words, longer than ideal but consolidation message needs to acknowledge his architecture work
-- Tone check: honest about apiary's gaps, credits his architecture work explicitly, proposes consolidation NOT competition, asks for his input twice (proxy E2E test, JSONL-to-Postgres port)
-- TL;DR if 30s: "Codex says ship apiary Sunday (working demo), adopt your vocabulary now (Class A/B/C + types), port to your stack after. 5-item pre-Sunday diff going in now. 6 decisions still in your court."
+- File at `apiary/pitch/whatsapp-andreas-consolidation.md`
+- Marker-clean
+- ~700 words
+- Tone: honest about my earlier underestimate of his repo, credits his shipped TASK-1.10 work explicitly, surfaces the Drive 401 as concrete blocker
+- TL;DR for 30 sec: "5 agent-readable docs landed in apiary, multi-ecosystem ships, finetune adapter ready for your Drive data once you fix the 401, sibling-not-rival framing throughout, your CC agent reads FOR_ANDREAS_AGENT.md first."
