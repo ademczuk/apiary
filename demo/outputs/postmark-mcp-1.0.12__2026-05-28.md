@@ -2,7 +2,8 @@
 **Control ID:** APIARY-postmark-mcp-1.0.12
 **Package:** postmark-mcp@1.0.12
 **Decision:** ALLOW
-**Evaluated:** 2026-05-27T21:34:57.437508+00:00
+**Threat class:** A - Compromised-Maintainer Version Bump (primary apiary focus)
+**Evaluated:** 2026-05-28T08:09:58.042109+00:00
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
 
@@ -13,6 +14,14 @@ This evaluation enforces dependency-intake controls aligned with:
 - ISO/IEC 27001:2022 A.8.28 (Secure coding)
 - NIST SP 800-218 (SSDF) PS.3.1 (Reuse only well-secured software)
 - CIS Control 16 (Application Software Security)
+
+## Threat Model
+
+This decision is classified under ModuleWarden Threat Class A.
+
+- Class A - Compromised-Maintainer Version Bump (apiary v1 primary focus)
+- Class B - Supply-chain malware (typosquatting, dependency confusion) - not optimized for
+- Class C - Novel vulnerability discovery - pattern checks only, not a general oracle
 
 ## Decision
 Package meets all dependency-intake controls and is approved for installation.
@@ -32,18 +41,18 @@ Package meets all dependency-intake controls and is approved for installation.
   - sha512 verified
 
 - **source_match** - FAIL
-  - source-match-not-verified (inputs present but diff stage TODO)
+  - skipped (no verdict)
 
 - **allowlist_override** - PASS
   - postmark-mcp@1.0.12 is on the curated allowlist; source_match stub bypassed
 
 
 ## LLM Audit Summary (if performed)
-None
+Not performed.
 
 ## Evidence Hashes
 - Package tarball SHA-512: `d57d70c746a2c82bd4bb084deffbeae023dea4928b39354f3d464812279cb016a3d1dacb1e85cf0988e65199255852b942cade41e3f3e63099c42335e7dfac18`
-- Metadata snapshot SHA-256: `3053ead885d6b2e8d23f1fa6fd5aeec920f4fd738b056720ee1331f094b44c90`
+- Metadata snapshot SHA-256: `417933e7164700c79a083dc99bd22699eb0031ebecdd36c896edad6991f9665d`
 
 ## Exception Path
 If this decision is incorrect, file an exception via:

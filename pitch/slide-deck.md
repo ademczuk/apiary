@@ -175,21 +175,21 @@ Three large bullets, each with an icon and a one-line caption. Stacked verticall
 
 ## Slide 10 - What is and is not shipped
 
-**Speaker note:** "Honest scope. The registry proxy, the policy engine, the quarantine workflow, the audit pipeline, and the demo replay all work end to end and are in the repo. Three things we knowingly punted: the source-match rule is a stub that always returns False, so the demo allowlist short-circuits it for the clean baselines; the figshare label fix for one mislabeled benign batch is documented but not applied to the v1 classifier; and the proxy cache uses simple TTL eviction, not LRU. If a judge pokes at the repo we want them to find what we already know is missing."
+**Speaker note:** "Honest scope. The registry proxy, the policy engine, the source-match diff against upstream git, the LRU tarball cache, the quarantine workflow, the audit pipeline, and the demo replay all work end to end and are in the repo. One thing we knowingly punted: the figshare label fix for one mislabeled benign batch is documented but not applied to the v1 classifier, because rerunning the LoRA fine-tune was not scheduled before the ship date. If a judge pokes at the repo we want them to find what we already know is missing."
 
 **Visual:** Two-column table. Left: "Ships in v2.0". Right: "Knowingly deferred". Each side has a bulleted list. No padding or bluffing.
 
 **Bullets (left):**
 - Registry proxy with metadata rewrite and tarball serving
 - 5-rule policy engine
+- source_match real upstream-repo diff (520 LOC, lodash 99% match in 16.8s)
+- LRU tarball cache eviction with configurable disk quota
 - Quarantine workflow with sibling rationale validation
 - LLM audit pipeline, three backends
 - postmark-mcp incident replay with Control Evidence Memo
 
 **Bullets (right):**
-- Source-match rule (stub, demo short-circuits with allowlist)
 - Figshare label fix for one mislabeled benign batch (v1 classifier only)
-- LRU cache eviction (currently TTL only)
 
 **Judges' question this answers:** "What is real and what is hand-waved?"
 

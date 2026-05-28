@@ -109,26 +109,38 @@ python -m apiary_quarantine.workflow validate
 orphaned. Wire it into a git pre-commit hook to keep the audit trail
 honest.
 
+## What ships in v2.0 (corrections to earlier drafts)
+
+Two items that earlier drafts of this README listed as "deferred" or
+"stub" ship for real in the v2.0 line. Calling them out so the doc
+matches the code:
+
+- **source_match** is a real upstream-repo diff
+  (`apiary_policy/source_match.py`, 520 LOC). It downloads the upstream
+  git archive at `gitHead`, extracts both trees, and compares files
+  by SHA256 with stem fallback for compiled output. Tri-state return
+  (pass / fail / skip) so a missing pointer routes to quarantine, not
+  block. Cached under `data/source-cache/`. Live test against
+  `lodash@4.17.21` yields 99% file match (1048 / 1049 files) in 16.8s.
+  The legacy stub described in earlier drafts was replaced in commit
+  `9fb21f1`.
+- **LRU cache eviction** ships at `apiary_proxy/cache_lru.py`. Background
+  asyncio sweep over `data/proxy-cache`, mtime-based recency, tarballs
+  evicted oldest-first when the on-disk total exceeds `max_bytes`
+  (default 10 GiB) down to 80% of max. Sidecar `.cache-stats.json` for
+  ops visibility. Earlier drafts saying "TTL only" are out of date.
+
 ## What's NOT included
 
 The v2.0 ship line is honest about what we punted. Judges who poke at the
 repo will find these. We'd rather you find them in the README than in the
 code.
 
-- **Source-match rule** (`apiary_policy/rules.py`). The `source_match` rule
-  is a stub that always returns False. The demo replay short-circuits this
-  for the three baselines with an explicit allowlist. Closing it out
-  requires attesting publisher-to-repo provenance against a known set of
-  signed commits or release artifacts; that work is queued for Q3 2026.
 - **Figshare label fix**. The v1 classifier's training corpus has one
   mislabeled benign batch from the figshare NPM Malicious Package Study
   that we identified during model evaluation. The fix is documented but
   not yet applied; rerunning the LoRA fine-tune is a Leonardo job we did
   not schedule before the ship date.
-- **LRU cache eviction**. The proxy cache uses simple TTL eviction (1h
-  metadata, persistent tarballs). LRU eviction with a configurable disk
-  quota is the right shape for production; for the hackathon we leaned
-  on "disks are big" and shipped TTL.
 - **Multi-tenant proxy**. One Apiary instance serves one organizational
   unit today. Multi-tenant deployments need per-tenant cache partitioning,
   policy overlays, and audit log isolation. Conceptually simple, queued

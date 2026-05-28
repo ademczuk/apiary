@@ -259,12 +259,21 @@ def _run_llm_audit(incident_dir: Path) -> str | None:
 # ----------------------------------------------------------------------------
 
 
-def _print_header(incident: str, package: str, version: str) -> None:
+def _print_header(
+    incident: str, package: str, version: str, threat_class: str = "A"
+) -> None:
     bar = "=" * 70
+    threat_descriptions = {
+        "A": "Compromised-Maintainer Version Bump",
+        "B": "Supply-Chain Malware (typosquatting / dep confusion)",
+        "C": "Novel Vulnerability Discovery",
+    }
+    desc = threat_descriptions.get(threat_class, "")
     print()
     print(bold(bar))
     print(bold(f"  APIARY INCIDENT REPLAY: {incident}"))
     print(bold(f"  Package: {package}@{version}"))
+    print(bold(f"  Threat class: {threat_class} ({desc})"))
     print(bold(bar))
     print()
 
@@ -378,8 +387,13 @@ def run_incident(
         },
     }
 
+    # ModuleWarden threat-class taxonomy. All three in-tree incidents are
+    # Class A (Compromised-Maintainer Version Bump); the postmark-mcp 1.0.16
+    # case is the textbook example. Override here when other incidents land.
+    threat_class = "A"
+
     if not quiet:
-        _print_header(incident, package, version)
+        _print_header(incident, package, version, threat_class=threat_class)
 
     key = f"{package}@{version}"
     allowlisted = key in quarantine_db.get("allowlist", {})
@@ -433,6 +447,7 @@ def run_incident(
         llm_audit=llm_audit,
         tarball_sha512=tarball_sha512,
         metadata_sha256=metadata_sha256,
+        threat_class=threat_class,
     )
     memo_text = render_control_evidence_memo(context)
 

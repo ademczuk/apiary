@@ -2,7 +2,8 @@
 **Control ID:** APIARY-lodash-4.17.21
 **Package:** lodash@4.17.21
 **Decision:** ALLOW
-**Evaluated:** 2026-05-27T21:34:57.541545+00:00
+**Threat class:** A - Compromised-Maintainer Version Bump (primary apiary focus)
+**Evaluated:** 2026-05-28T08:09:58.976098+00:00
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
 
@@ -13,6 +14,14 @@ This evaluation enforces dependency-intake controls aligned with:
 - ISO/IEC 27001:2022 A.8.28 (Secure coding)
 - NIST SP 800-218 (SSDF) PS.3.1 (Reuse only well-secured software)
 - CIS Control 16 (Application Software Security)
+
+## Threat Model
+
+This decision is classified under ModuleWarden Threat Class A.
+
+- Class A - Compromised-Maintainer Version Bump (apiary v1 primary focus)
+- Class B - Supply-chain malware (typosquatting, dependency confusion) - not optimized for
+- Class C - Novel vulnerability discovery - pattern checks only, not a general oracle
 
 ## Decision
 Package meets all dependency-intake controls and is approved for installation.
@@ -32,18 +41,18 @@ Package meets all dependency-intake controls and is approved for installation.
   - sha512 verified
 
 - **source_match** - FAIL
-  - source-match-not-verified (inputs present but diff stage TODO)
+  - skipped (no verdict)
 
 - **allowlist_override** - PASS
   - lodash@4.17.21 is on the curated allowlist; source_match stub bypassed
 
 
 ## LLM Audit Summary (if performed)
-None
+Not performed.
 
 ## Evidence Hashes
 - Package tarball SHA-512: `b3406010991dd73456ca56a9e0e48a93d91ea8472f68248fc28682679a66c99f3278c17db5ff53d756e577f44415f20191c2ac1845627fb17435cc0effd1094b`
-- Metadata snapshot SHA-256: `0a764d679da765cf22be716c051159d269ded6a6c9f1e6e27022f8f995f8e4f5`
+- Metadata snapshot SHA-256: `6ba4165a2f2491adfd65f0c87a994789e15180937819ccf43faa92e0481d615b`
 
 ## Exception Path
 If this decision is incorrect, file an exception via:

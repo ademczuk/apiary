@@ -2,6 +2,7 @@
 **Control ID:** {{ control_id }}
 **Package:** {{ package }}@{{ version }}
 **Decision:** {{ decision | upper }}
+**Threat class:** {{ threat_class | default("A") }} - {{ threat_class_description | default("Compromised-Maintainer Version Bump") }}
 **Evaluated:** {{ timestamp }}
 **Policy version:** {{ policy_version }}
 **Evaluator:** apiary {{ apiary_version }}
@@ -13,6 +14,14 @@ This evaluation enforces dependency-intake controls aligned with:
 - ISO/IEC 27001:2022 A.8.28 (Secure coding)
 - NIST SP 800-218 (SSDF) PS.3.1 (Reuse only well-secured software)
 - CIS Control 16 (Application Software Security)
+
+## Threat Model
+
+This decision is classified under ModuleWarden Threat Class {{ threat_class | default("A") }}.
+
+- Class A - Compromised-Maintainer Version Bump (apiary v1 primary focus)
+- Class B - Supply-chain malware (typosquatting, dependency confusion) - not optimized for
+- Class C - Novel vulnerability discovery - pattern checks only, not a general oracle
 
 ## Decision
 {{ decision_description }}

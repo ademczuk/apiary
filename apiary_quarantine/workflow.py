@@ -257,11 +257,16 @@ def _plain_text_memo(context: dict[str, Any]) -> str:
         )
     rule_block = "\n".join(rule_lines) if rule_lines else "(none recorded)"
 
+    threat_class = context.get("threat_class", "A")
+    threat_class_description = context.get(
+        "threat_class_description", "Compromised-Maintainer Version Bump"
+    )
     return (
         "# Control Evidence Memo\n"
         f"**Control ID:** {context.get('control_id', '')}\n"
         f"**Package:** {context.get('package', '')}@{context.get('version', '')}\n"
         f"**Decision:** {str(context.get('decision', '')).upper()}\n"
+        f"**Threat class:** {threat_class} - {threat_class_description}\n"
         f"**Evaluated:** {context.get('timestamp', '')}\n"
         f"**Policy version:** {context.get('policy_version', '')}\n"
         f"**Evaluator:** apiary {context.get('apiary_version', '')}\n\n"
@@ -316,8 +321,27 @@ def build_memo_context(
     metadata_sha256: str = "(not computed)",
     control_id: str | None = None,
     approver_role: str = "Security Engineering",
+    threat_class: str = "A",
 ) -> dict[str, Any]:
-    """Assemble the template context dict from raw policy outputs."""
+    """Assemble the template context dict from raw policy outputs.
+
+    ``threat_class`` follows ModuleWarden's A/B/C taxonomy. Apiary v1
+    primarily targets Class A (Compromised-Maintainer Version Bump);
+    Class B (typosquatting / dependency confusion) is not the optimization
+    target; Class C (novel vulnerability discovery) is supported through
+    pattern checks only.
+    """
+    # Mirror the THREAT_CLASS_DESCRIPTIONS table from shared.types so the
+    # plain-text fallback memo and the Jinja template render the same wording.
+    try:
+        from shared.types import THREAT_CLASS_DESCRIPTIONS
+
+        threat_class_description = THREAT_CLASS_DESCRIPTIONS.get(
+            threat_class, THREAT_CLASS_DESCRIPTIONS["A"]
+        )
+    except ImportError:
+        threat_class_description = "Compromised-Maintainer Version Bump"
+
     decision_descriptions = {
         "allow": (
             "Package meets all dependency-intake controls and is approved "
@@ -350,6 +374,8 @@ def build_memo_context(
         "approver_role": approver_role,
         "loss_path": loss_path,
         "incident_class": incident_class,
+        "threat_class": threat_class,
+        "threat_class_description": threat_class_description,
     }
 
 

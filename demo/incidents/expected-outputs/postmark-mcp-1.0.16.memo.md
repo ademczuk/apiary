@@ -2,6 +2,7 @@
 **Control ID:** APIARY-postmark-mcp-1.0.16
 **Package:** postmark-mcp@1.0.16
 **Decision:** BLOCK
+**Threat class:** A - Compromised-Maintainer Version Bump (primary apiary focus)
 **Evaluated:** <TIMESTAMP>
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
@@ -13,6 +14,14 @@ This evaluation enforces dependency-intake controls aligned with:
 - ISO/IEC 27001:2022 A.8.28 (Secure coding)
 - NIST SP 800-218 (SSDF) PS.3.1 (Reuse only well-secured software)
 - CIS Control 16 (Application Software Security)
+
+## Threat Model
+
+This decision is classified under ModuleWarden Threat Class A.
+
+- Class A - Compromised-Maintainer Version Bump (apiary v1 primary focus)
+- Class B - Supply-chain malware (typosquatting, dependency confusion) - not optimized for
+- Class C - Novel vulnerability discovery - pattern checks only, not a general oracle
 
 ## Decision
 Package fails one or more blocking controls and is refused service by the registry proxy. Installation is prevented.

@@ -2,7 +2,8 @@
 **Control ID:** APIARY-postmark-mcp-1.0.16
 **Package:** postmark-mcp@1.0.16
 **Decision:** BLOCK
-**Evaluated:** 2026-05-27T21:36:53.782595+00:00
+**Threat class:** A - Compromised-Maintainer Version Bump (primary apiary focus)
+**Evaluated:** 2026-05-28T08:09:41.642367+00:00
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
 
@@ -14,6 +15,14 @@ This evaluation enforces dependency-intake controls aligned with:
 - NIST SP 800-218 (SSDF) PS.3.1 (Reuse only well-secured software)
 - CIS Control 16 (Application Software Security)
 
+## Threat Model
+
+This decision is classified under ModuleWarden Threat Class A.
+
+- Class A - Compromised-Maintainer Version Bump (apiary v1 primary focus)
+- Class B - Supply-chain malware (typosquatting, dependency confusion) - not optimized for
+- Class C - Novel vulnerability discovery - pattern checks only, not a general oracle
+
 ## Decision
 Package fails one or more blocking controls and is refused service by the registry proxy. Installation is prevented.
 
@@ -23,7 +32,7 @@ Package fails one or more blocking controls and is refused service by the regist
   - no quarantine db loaded
 
 - **release_age** - FAIL
-  - released 0.0d ago, minimum is 14d
+  - released 0.0d ago, minimum is 7d
 
 - **install_scripts** - FAIL
   - non-trivial lifecycle scripts: postinstall='node postinstall.js'
@@ -32,7 +41,7 @@ Package fails one or more blocking controls and is refused service by the regist
   - sha512 verified
 
 - **source_match** - FAIL
-  - repository.url missing; source-match-not-verified
+  - skipped (no verdict)
 
 
 ## LLM Audit Summary (if performed)
@@ -40,7 +49,7 @@ Not performed.
 
 ## Evidence Hashes
 - Package tarball SHA-512: `f59c4cd308ca26abd904ba243b028256c275cb433074cbffe0fabf66a0137c8bee873bea65f1530da686390e698a8b7574f2c8baa27a3a0cfb074bf79f3ad744`
-- Metadata snapshot SHA-256: `ce0cf9f335f63736c5d81c6713ac368d400ba2d2638ea6989a0068de24144daa`
+- Metadata snapshot SHA-256: `e9239232a4ca841689204e54102e7517156a1a73e63cbffc2f6eaed2a01f0024`
 
 ## Exception Path
 If this decision is incorrect, file an exception via:

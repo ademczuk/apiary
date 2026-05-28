@@ -2,6 +2,7 @@
 **Control ID:** APIARY-lodash-4.17.21
 **Package:** lodash@4.17.21
 **Decision:** ALLOW
+**Threat class:** A - Compromised-Maintainer Version Bump (primary apiary focus)
 **Evaluated:** <TIMESTAMP>
 **Policy version:** 1.0
 **Evaluator:** apiary 0.1.0
@@ -13,6 +14,14 @@ This evaluation enforces dependency-intake controls aligned with:
 - ISO/IEC 27001:2022 A.8.28 (Secure coding)
 - NIST SP 800-218 (SSDF) PS.3.1 (Reuse only well-secured software)
 - CIS Control 16 (Application Software Security)
+
+## Threat Model
+
+This decision is classified under ModuleWarden Threat Class A.
+
+- Class A - Compromised-Maintainer Version Bump (apiary v1 primary focus)
+- Class B - Supply-chain malware (typosquatting, dependency confusion) - not optimized for
+- Class C - Novel vulnerability discovery - pattern checks only, not a general oracle
 
 ## Decision
 Package meets all dependency-intake controls and is approved for installation.
