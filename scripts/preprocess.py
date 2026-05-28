@@ -315,6 +315,49 @@ def _label_for_package(pkg_dir: Path, archive_path: Path) -> int:
     return 0
 
 
+def infer_label(member: str) -> str:
+    """Public bridge for apiary_train.data_prep.
+
+    Takes a zip-member path string (e.g.
+    "NPMStudy/Data/cleaning/false_negative/foo/1.2.3/package/index.js")
+    and returns one of "malicious" | "clean" | "suspicious".
+
+    Uses the ground-truth cache loaded from
+    data/raw/figshare/63179326_unpacked if not already populated.
+    """
+    import re as _re
+
+    global _LABEL_CACHE
+    parts = Path(member).parts
+    name: str | None = None
+    version: str | None = None
+    for i, p in enumerate(parts):
+        if _re.match(r"^\d+\.\d+(\.\d+)?", p) and i > 0 and parts[i - 1] not in {
+            "package",
+            "NPMStudy",
+        }:
+            version = p
+            name = parts[i - 1]
+            break
+    if name is None:
+        return "suspicious"
+
+    if _LABEL_CACHE is None:
+        archive_root = Path("data/raw/figshare/63179326_unpacked")
+        if not archive_root.exists():
+            return "suspicious"
+        _LABEL_CACHE = _load_ground_truth(archive_root)
+
+    versions = _LABEL_CACHE.get(name)
+    if versions is not None:
+        if version is not None and version in versions:
+            return "malicious" if versions[version] == 1 else "clean"
+        distinct = set(versions.values())
+        if len(distinct) == 1:
+            return "malicious" if distinct.pop() == 1 else "clean"
+    return "suspicious"
+
+
 def _record_for_package(pkg_dir: Path, archive_path: Path) -> dict | None:
     """Build a single record dict for one package directory."""
     pkg_json_path = pkg_dir / "package.json"
