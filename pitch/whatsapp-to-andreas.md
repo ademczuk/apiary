@@ -1,87 +1,98 @@
-# WhatsApp message to Andreas - 2026-05-27 (final, post-pivot)
+# WhatsApp message to Andreas - 2026-05-28 (post H100 v3 stack)
 
 Copy-paste below the line. Uses WhatsApp markdown (asterisks for bold, underscores for italic).
 
 ---
 
-*Apiary v2 - Zero-One Hack final prep update*
+*Apiary v3 - H100 training stack landed*
 
-Took your meeting notes, did a hard pivot. v1 was a CodeBERT classifier with marketing - wrong product for UNIQA judges. v2 is the *self-hosted dependency firewall* you described: registry proxy + deterministic policy gate + git-driven .md quarantine workflow + LLM audit + insurance-grade evidence artifacts.
+Three big things since the last update.
 
-Four external reviews drove this: Codex adversarial (caught 3 security bugs), Pantheon council HIGH confidence, Grok strategic ("sponsor irrelevance theater" warning + +€/loss-ratio framing), my own /code-review pass.
+*1) v3 training stack is in*
 
-*3 links*
-- Hackathon repo: https://github.com/ademczuk/apiary
-- Live landing page (updated for v2 + insurance framing): https://ademczuk.github.io/modulewarden-website/
-- Branch on your repo: https://github.com/apetersson/ModuleWarden/tree/feat/landing-site
+`apiary_train/` module shipped: abliteration (Failspy refusal-direction orthogonalization), SFT LoRA via trl.SFTTrainer + peft, eval with verdict accuracy + refusal-rate + AUROC, rehearsal pipeline that runs end-to-end on Qwen2.5-Coder-1.5B in 30 min for pre-flight, multinode slurm script for 64x H100 distributed.
 
-*What's on disk* (15,700 LOC across 71 files, all committed + pushed, 7-commit history on main)
-- `apiary_proxy/` - Verdaccio-style npm registry proxy with on-disk cache (568 LOC)
-- `apiary_policy/` - 5-rule deterministic gate: release-age >=14d, no install scripts, SRI checksum, source-match, quarantine-db (413 LOC)
-- `apiary_quarantine/` - policy.json + sibling .md rationale workflow + Jinja2 Control Evidence Memo template in SOC 2 / ISO 27001 / NIST SSDF vocabulary (446 LOC)
-- `apiary_auditors/` - LLM audit prompt builder (25% rubric, 75% code) with OpenAI, Ollama, *Dwarfstar* backend adapters (459 LOC)
-- `apiary_cache/` - seed top-N packages into pre-audited cache (402 LOC)
-- `demo/run_incident_replay.py` - *the killer demo*: runs apiary v2 against the sanitized postmark-mcp@1.0.16 reconstruction, produces BLOCK with rule-by-rule reasoning, generates a Control Evidence Memo. Smoke-tested PASS on 3 incidents (1.0.16 blocks, 1.0.12 allows, lodash allows).
-- `pitch/underwriter-economics.md` - the insurance one-pager Grok said wins the room (real citations from NAIC, Coalition, Verizon DBIR)
-- `pitch/insurance-economics-slides.md` - 2-slide insert for the deck
-- `pitch/track-reframes.md`, `video-script.md`, `slide-deck.md` (11 slides), `q-and-a-prep.md` (20 Qs), `demo-runbook.md`
-- 22-pattern attack catalog with real-world citations (worms removed per your note)
-- CodeBERT pipeline still there, demoted to "one signal among many"
+Wall-clock estimates from the build agent:
+- *GLM 5.1 32B on 64x H100*: data prep 15-45min + abliteration 30-90min + SFT 4-7h + eval 20-45min = *6-9h total*. Inside the 36h budget with room for one re-run.
+- *DeepSeek 4 Pro 70B*: roughly double, *12-18h total*. Tight, consider 4-bit base load.
+- *Llama 3.1 8B / Mistral 7B*: single-node 8x H100, ~13h total.
 
-*3 security bugs caught + fixed* (would have torpedoed a security pitch)
-1. SSRF in /score - anyone could fetch AWS metadata via the gate. Now hostname allowlist.
-2. Path traversal in `tarfile.extractall` - malicious package could write `../../etc/whatever`. Now safe extractor.
-3. Slurm script args mismatched train_codebert.py CLI - first sbatch would have burned 8h walltime in 30 seconds.
+CodeBERT classifier still in repo as the deterministic backup signal, demoted but not deleted.
 
-*The killer demo* (Pantheon council's exact call): `python demo/run_incident_replay.py --incident postmark-mcp-1.0.16`. Output:
+*2) Pantheon council pushed back on the 32B/70B plan*
+
+I asked Pantheon council for a brutal review before kicking off the build. Verdict (MEDIUM confidence, 2 reviewers + chairman): *recommend Llama 3.1 8B abliterated, not 32B GLM or 70B DeepSeek*.
+
+Their three points worth knowing:
+
+- *13K real examples is thin for 32B even with LoRA.* Need 1:2 to 1:4 synthetic ratio to avoid overfit. For 7B/8B, 13K real + our existing 50K synthetic is enough.
+- *"Abliteration" is a PITCH LIABILITY for UNIQA judges*, not an asset. Cyber-insurance underwriters hear "uncensored model" as "weak governance / compliance risk". Don't say "removed refusal vectors". Say: *"domain-specialized security-analysis model running inside a governed pipeline with deterministic pre-filters, schema-constrained outputs, audit logs, human review."* Same fact, very different reception.
+- *Multi-node NCCL collapse is the killer on 70B*, not the math.
+
+I built ALL THREE configs (`sft_config_glm.yaml`, `sft_config_deepseek.yaml`, plus the 8B-ready default) so we can pick at sbatch time. The slurm scripts are model-agnostic.
+
+*3) Build agent's "if you must cut one thing, cut abliteration" advice*
+
+Counterintuitive but agent argues: coder-base models don't have heavy RLHF refusal cascades anyway. Failing to abliterate costs 5-15% verdict accuracy on edge cases. Failing to SFT costs the entire task. Skip the abliteration stage to reclaim 30-90min + remove a whole class of "layer resolution failed" failure modes.
+
+*Your call: which model do we default the slurm script to?*
+
+- *A: Llama 3.1 8B abliterated* — Pantheon's recommendation, safest, leaves 64-GPU headroom for parallel eval and synthetic data generation
+- *B: GLM 5.1 32B abliterated* — your original ask, runnable in 6-9h on 8 nodes, no buffer for mistakes
+- *C: All three configs, you decide Friday based on case-reveal scope*
+
+I defaulted to *C* in the slurm script comments — uncomment the right line at submit time. Tell me if you want a different default and I'll repoint.
+
+*Pre-flight before sbatch (do this on the dev machine Saturday morning)*
+
 ```
-[FAIL] release_age     released 0.0d ago, minimum is 14d
-[FAIL] install_scripts non-trivial: postinstall='node postinstall.js'
-[FAIL] source_match    repository.url missing
-VERDICT: BLOCK - installation refused
-Audit memo: demo/outputs/postmark-mcp-1.0.16__2026-05-27.md
-Safe fallback: npm install postmark-mcp@1.0.12
+python -m apiary_train.rehearsal --base-model Qwen/Qwen2.5-Coder-1.5B --quick
 ```
-That is the 60 seconds. Plus the memo opens in their PDF reader looking like a SOC 2 control report.
 
-*Honest insurance economics (corrected from Grok's first-pass)*
-Grok floated "+22pt margin / 35% premium discount" - those numbers do NOT survive contact with the public citations. Defensible math (NAIC 2025 + Coalition MDR precedent + Verizon DBIR 2024):
-- Per-account: *+11 to +14 percentage points margin*
-- Portfolio-level: *+2 to +4 points* after eligibility weighting
-- Premium discount precedent: Coalition publishes *12.5%* for verified MDR, not 35%
-This is what's in the one-pager. More credible to a 25-year insurance veteran than inflated numbers.
+Runs the full pipeline end-to-end on a 1.5B model. ~30 min on any 24GB GPU. Catches the most likely "layer resolution / tokenizer / FSDP wrapping" failure modes before burning H100 hours.
 
-*3 demo risks for Sunday*
-1. `source_match` rule is a stub that fails for every package. Demo masks this with an allowlist override. Sharp judge could ask "would lodash also fail on a fresh machine?" - honest answer: yes, source-match is unimplemented, the allowlist is the documented exception path.
-2. `jinja2` must be `pip install`'d on the demo machine or memo loses formatting. Add to preflight.
-3. 14-day release-age will block fresh hotfixes if judge asks "install the latest X". Either lower to 1d for demo run or pre-stage allowlist.
+*Other things landed this round*
 
-*What I need from you (priority order)*
-1. *Track confirmation: UNIQA Insurance.* Grok + Pantheon both call it. Pitch reframed around "reduces loss ratio + produces underwriting evidence" not "trained a classifier".
-2. *ChatGPT shared project link* you sent (zero-one-hack-vienna-...) - I cannot access it (auth-gated). Screenshot or paste-dump the brief contents?
-3. *Dwarfstar endpoint for DeepSeek 4 Flash* - backend stub is wired. Send URL + model name and we drop in env vars (APIARY_DWARFSTAR_URL, APIARY_DWARFSTAR_MODEL).
-4. *UNIQA pre-outreach* - Grok's highest-impact call: email their hackathon contact tonight asking for 2-3 anonymized historical cyber-claim cases. Even one real example anchored to their actual claims would jump us from 55% to 65% podium odds.
-5. *Figshare label-inference bug* I caught in `scripts/preprocess.py:126` - the path-name heuristic does not match the actual NPMStudy archive layout. Result: every package labels as 0, training silently produces a constant classifier. ~30 min fix. Want me to handle it or you?
-6. *Leonardo or H100 status* - slurm script wired, needs your account. If Leonardo not happening, what's plan B for compute?
+- *Real source-match rule* (not the stub) - fetches upstream repo archive, file-by-file SHA256 compare, 95% match threshold. Lodash live test: 99% match in 16.8s.
+- *Per-environment policy tiers* - dev (warn-only, age 0d, scripts allowed), preprod (age 7d, scripts denied), prod (age 14d, scripts denied, source-match required).
+- *LRU eviction* on the proxy tarball cache (10GB default, mtime-based, background asyncio sweep).
+- *Figshare label-inference fix* - the path heuristic was failing on the real archive layout. Found correct ground-truth at `ToolDetection/DetectionResults/sap_DT/`: 7,024 benign + 6,571 malicious = 13,595 labeled. Cross-agent bridge `scripts.preprocess.infer_label()` added so v3 data_prep can use them.
+- *Bumblebee v2 bridge* - rewired from old v1 gate to new proxy endpoint. Smoke test: 1 BLOCK for postmark-mcp@1.0.16, 7 ALLOW for benign. CI gate exit code works.
+- *Test goldens regenerated* for the new source-match SKIPPED behavior. All three incident replays PASS.
+- *apetersson invited to ademczuk/apiary as write-access collaborator* (invitation 320392839, accept at https://github.com/ademczuk/apiary/invitations). FYI: your own ModuleWarden repo pushed 2h ago with lockfile import + subscriptions + proactive upstream auditing + isolated Docker audit runner work. We're convergent, not divergent.
 
-*3 to read before Friday Case Reveal*
-1. `pitch/underwriter-economics.md` - the insurance math one-pager
-2. `pitch/demo-runbook.md` - Sunday morning step-by-step
-3. `demo/run_incident_replay.py` and run it once: `python demo/run_incident_replay.py --incident postmark-mcp-1.0.16`
+*Critical caveat on figshare data*
 
-*Honest win probability (Grok's read, my agreement)*
-- As shipped: *~38% podium, ~15% first place*
-- + UNIQA real-claim data from your outreach: *~55-60% podium, ~30% first place*
+The 88MB archive we downloaded has labels for 13,595 packages but actual `package.json` files for only 636 (all in `Data/cleaning/false_negative/`). The other 14K reference packages in `unzip_malware/` / `unzip_benign/` directories that need either:
+- the full 3.4GB archive download (`scripts/download_figshare.py --full`)
+- OR re-downloading via the dataset's `Data/collection/package_download.py`
 
-All tests pass, 7 commits to main, repo clean, ready to clone.
+If you're starting the H100 run Saturday, kick off the 3.4GB download Friday night so the SFT job has actual training material.
 
-Last thing: I sleep at this point. If anything urgent comes up overnight, ping me on Discord, otherwise we sync tomorrow morning to lock the Friday plan.
+*Updated honest win probability*
+
+- As shipped pre-H100-stack: ~38% podium
+- *Now with v3 training infra*: ~45-50% podium IF the SFT run completes cleanly + we frame the model as "domain-specialized security analyst" not "abliterated"
+- *+ UNIQA real-claim outreach landing*: ~55-60% podium
+- *+ Sunday demo executes without surprises*: ~60-65% podium / ~30% first place
+
+*Decisions I still need from you*
+
+1. Model default for slurm? (A/B/C above)
+2. Did the 3.4GB figshare archive get downloaded yet? Andreas needs to kick this off Friday night at latest
+3. Dwarfstar endpoint for DeepSeek 4 Flash for the inference path - URL + model name, drop in `APIARY_DWARFSTAR_URL` / `APIARY_DWARFSTAR_MODEL` env vars
+4. UNIQA outreach - any reply from their hackathon contact?
+5. The ChatGPT shared project link (zero-one-hack-vienna-...) brief - screenshot or paste?
+6. Accept the collaborator invitation on ademczuk/apiary
+
+Repo is at https://github.com/ademczuk/apiary, 12 commits to main, all CI clean. Live landing page at https://ademczuk.github.io/modulewarden-website/.
+
+I'm at the natural sleep break. Ping me on Discord if anything urgent overnight; otherwise we sync morning to lock the Saturday plan.
 
 ---
 
 ## Notes for me (not for Andreas)
 
-- File at `apiary/pitch/whatsapp-to-andreas.md`
-- WhatsApp formatting: *bold*, _italic_, `code`, ~strikethrough~
-- Message length: ~750 words, fits in one WhatsApp message
-- TL;DR if Andreas wants 50 words: "Pivoted to your vision per meeting notes, repo updated, 3 security bugs fixed, postmark replay demo works, insurance math one-pager done, landing page updated, 6 decisions needed from you, ~55% podium odds with UNIQA outreach"
+- File at `apiary/pitch/whatsapp-to-andreas.md`, marker-clean
+- ~900 words, longer than ideal but the situation has compounded a lot of decisions
+- TL;DR if he wants 30s: "H100 v3 training stack landed (abliteration + SFT LoRA for GLM/DeepSeek/8B on 64xH100, 6-9h for 32B, all model-agnostic). Pantheon recommends 8B not 32B for safety. 6 decisions needed. Accept the apiary collab invite."
